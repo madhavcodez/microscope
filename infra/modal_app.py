@@ -44,6 +44,9 @@ full_image = base_image.run_commands(
     "pip install sae-bench || pip install 'git+https://github.com/adamkarvonen/SAEBench.git' || true",
     "pip install 'git+https://github.com/EleutherAI/delphi.git' || true",
     "pip install 'git+https://github.com/saprmarks/feature-circuits.git' || true",
+    # EleutherAI sparsify — trains the custom SAE + skip-transcoder (ADR-0004). Install from the
+    # EleutherAI repo (NOT PyPI 'sparsify', which is Neural Magic's unrelated package).
+    "pip install 'git+https://github.com/EleutherAI/sparsify.git' || true",
     # torchvision is an unused transitive dep whose video API breaks the HF `datasets` torch
     # formatter (ImportError: VideoReader) during delphi's text caching — remove it.
     "pip uninstall -y torchvision || true",
@@ -128,6 +131,91 @@ def reproduce_recon(layer: int = 12, width: str = "16k", n_docs: int = 128, seq_
     }
     for k, v in out.items():
         print(f"{k:20s} {v}")
+    return out
+
+
+@app.function(image=full_image, secrets=[HF_SECRET], timeout=1200)
+def probe_sparsify() -> dict[str, str]:
+    """E4 (ADR-0004): introspect the installed EleutherAI sparsify — SAE/transcoder config + API."""
+    import dataclasses
+    import importlib
+    import inspect
+    import subprocess
+
+    out: dict[str, str] = {}
+    try:
+        import sparsify
+    except Exception as exc:  # noqa: BLE001
+        out["sparsify"] = f"IMPORT FAILED: {type(exc).__name__}: {str(exc)[:200]}"
+        for k, v in out.items():
+            print(f"{k}\n    {v}")
+        return out
+
+    out["sparsify.version"] = getattr(sparsify, "__version__", "?")
+    out["sparsify.file"] = str(getattr(sparsify, "__file__", "?"))  # confirm EleutherAI, not Neural Magic
+    out["sparsify.public"] = ", ".join(n for n in dir(sparsify) if not n.startswith("_"))[:400]
+
+    def _resolve(name: str) -> object:
+        obj = getattr(sparsify, name, None)
+        if obj is not None:
+            return obj
+        for sub in ("config", "trainer", "sae", "sparse_coder", "sparsecoder"):
+            try:
+                m = importlib.import_module(f"sparsify.{sub}")
+                if hasattr(m, name):
+                    return getattr(m, name)
+            except Exception:  # noqa: BLE001
+                continue
+        return None
+
+    for name in ("SaeConfig", "TrainConfig", "Trainer", "Sae", "SparseCoder"):
+        obj = _resolve(name)
+        if obj is None:
+            out[name] = "NOT FOUND"
+            continue
+        if dataclasses.is_dataclass(obj):
+            fields = [f.name for f in dataclasses.fields(obj)]
+            out[f"{name}<fields>"] = ", ".join(fields)[:500]
+            tc = [f for f in fields if any(s in f.lower() for s in ("transcod", "skip", "mlp"))]
+            out[f"{name}<transcode/skip>"] = ", ".join(tc) or "(none in field names)"
+        else:
+            try:
+                out[f"{name}()"] = f"{name}{inspect.signature(obj)}"[:300]
+            except (ValueError, TypeError):
+                out[name] = f"(type {type(obj).__name__})"
+        if name in ("Sae", "SparseCoder"):
+            methods = [
+                m for m in dir(obj)
+                if not m.startswith("_")
+                and any(s in m.lower() for s in ("save", "load", "encode", "decode", "pretrained"))
+            ]
+            out[f"{name}.io_methods"] = ", ".join(methods)[:300]
+
+    # CLI flags (does `python -m sparsify --help` expose --transcode / hookpoint / k / width?)
+    try:
+        r = subprocess.run(
+            ["python", "-m", "sparsify", "--help"], capture_output=True, text=True, timeout=60
+        )
+        help_txt = (r.stdout or "") + (r.stderr or "")
+        out["cli.transcode_in_help"] = str("transcode" in help_txt.lower())
+        rel = [
+            ln.strip() for ln in help_txt.splitlines()
+            if any(s in ln.lower() for s in ("transcode", "skip", "hookpoint", "--layer", "--k", "expansion", "--data"))
+        ]
+        out["cli.relevant_flags"] = " || ".join(rel[:14])[:600]
+    except Exception as exc:  # noqa: BLE001
+        out["cli"] = f"help FAILED: {type(exc).__name__}: {str(exc)[:100]}"
+
+    # delphi <- sparsify glue (the Phase-3 integration we must verify)
+    try:
+        from delphi.sparse_coders import load_sparsify
+
+        out["delphi.load_sparsify()"] = f"load_sparsify{inspect.signature(load_sparsify)}"[:300]
+    except Exception as exc:  # noqa: BLE001
+        out["delphi.load_sparsify"] = f"n/a: {type(exc).__name__}: {str(exc)[:100]}"
+
+    for k, v in out.items():
+        print(f"{k}\n    {v}")
     return out
 
 
