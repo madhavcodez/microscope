@@ -14,8 +14,11 @@
 name: train_gemma2_2b_l12
 model: google/gemma-2-2b
 layer: 12                            # same layer as the reproduction; sparsify hooks from layers=[12]
-hookpoint: blocks.12.hook_resid_post # E4: confirm the exact stream/hook on the live model (unit 2)
-dataset: monology/pile-uncopyrighted # E4: confirm availability / text field on Modal [gpu] (unit 2)
+hookpoint: null                      # layers-only: sparsify derives the resid hook from layers=[12]
+                                     # (unit-2 verified on Pythia; the Phase-1 TL name is NOT a sparsify
+                                     # HF-module path and would fail to resolve)
+dataset: NeelNanda/pile-10k          # small + ungated + already cached; sliced to n_tokens. (monology/
+                                     # pile-uncopyrighted is ~800GB and would fully download non-streamed)
 n_tokens: 10_000_000                 # MODEST start; exact budget is cost-gated in unit 3 (see header)
 seed: 0
 

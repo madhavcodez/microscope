@@ -518,11 +518,13 @@ def test_pythia_smoke_yaml_specific_values() -> None:
 
 
 def test_gemma_yaml_specific_values() -> None:
-    # Arrange / Act: pin the documented Gemma values (layer 12, width 16384, k 64, hookpoint set).
+    # Arrange / Act: pin the documented Gemma values (layer 12, width 16384, k 64, layers-only).
     settings = coder_config_dict(load_config(CONFIGS_DIR / "train_gemma2_2b_l12.yaml"), "sae")
 
     # Assert
     assert settings["layers"] == [12]
     assert settings["num_latents"] == 16384
     assert settings["k"] == 64
-    assert settings["hookpoints"] == ["blocks.12.hook_resid_post"]
+    # layers-only (hookpoint: null): sparsify derives the resid hook from layers=[12]. The Phase-1
+    # TransformerLens name is not a sparsify HF-module path (unit-2 verified on the Pythia smoke).
+    assert settings["hookpoints"] is None
