@@ -205,7 +205,8 @@ def train_coder(config: RunConfig, kind: CoderKind) -> dict[str, Any]:
 
     import torch
     from datasets import load_dataset
-    from transformers import AutoModel
+    from sparsify.data import chunk_and_tokenize
+    from transformers import AutoModel, AutoTokenizer
 
     # --- Build the sparsify configs from the verified flat settings (ADR-0004) ---
     # SaeConfig carries the coder-shape fields; the SAE/skip-transcoder distinction is exactly these
@@ -233,16 +234,22 @@ def train_coder(config: RunConfig, kind: CoderKind) -> dict[str, Any]:
         train_kwargs["hookpoints"] = settings["hookpoints"]
     train_config = sparsify.TrainConfig(**train_kwargs)
 
-    # --- Load the model + dataset (lazy, GPU-only) ---
+    # --- Load the model + tokenizer (lazy, GPU-only) ---
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = AutoModel.from_pretrained(settings["model"], torch_dtype="auto").to(device)
+    tokenizer = AutoTokenizer.from_pretrained(settings["model"])
 
-    # sparsify computes activations on-the-fly from the model (no disk cache — good for C3). Stream
-    # the dataset to keep memory/disk flat; the exact dataset/field wiring is confirmed in unit 2.
-    dataset_id = settings["dataset"] or "NeelNanda/pile-10k"
-    dataset = load_dataset(dataset_id, split="train", streaming=True)
+    # sparsify computes activations on-the-fly, but Trainer needs a TOKENIZED arrow Dataset
+    # (verified ADR-0004 unit-2): chunk_and_tokenize -> Trainer(cfg, dataset, model) -> .fit().
+    # Non-streaming so it is indexable; sliced to the n_tokens budget to control cost (C3/C4).
+    ctx_len = int(getattr(config, "ctx_len", 1024))
+    raw = load_dataset(settings["dataset"] or "NeelNanda/pile-10k", split="train")
+    tokenized = chunk_and_tokenize(raw, tokenizer, max_seq_len=ctx_len, text_key="text")
+    if settings["n_tokens"]:
+        n_examples = max(1, int(settings["n_tokens"]) // ctx_len)
+        tokenized = tokenized.select(range(min(n_examples, len(tokenized))))
 
-    trainer = sparsify.Trainer(train_config, dataset, model)
+    trainer = sparsify.Trainer(train_config, tokenized, model)
 
     # --- Launch training + save the dictionary, then return metrics (the unit-2 work) ---
     # The configs, model, dataset, and Trainer above are the real, verified GPU path (ADR-0004). The
@@ -273,22 +280,14 @@ def _launch_train_and_save(
     """
     save_path = f"{settings['save_dir']}/{settings['run_name']}"
 
-    # TODO(unit-2, E4): confirm the launch method on the live sparsify 1.3.0 image, then replace
-    # this raise with the two-line launch+save (the surrounding flow is otherwise complete):
-    #     trainer.fit()                              # or trainer.train() — verify, then un-TODO
-    #     coder = sparsify.Sae.load_from_disk(save_path)  # if post-training metrics need the coder
-    #     coder.save_to_disk(save_path)              # Sae/SparseCoder dictionary I/O (ADR-0004)
-    raise GpuStackUnavailable(
-        "train_coder: the sparsify train-launch method name (.fit() vs .train()) is the one "
-        "remaining E4 item (ADR-0004); it is confirmed and wired on the Modal [gpu] image in "
-        "Phase-2 unit 2, not on this CPU box. SaeConfig/TrainConfig/model/dataset/Trainer are all "
-        "built and validated; only this launch+save call is unit-2 work."
-    )
-
-    # Unit-2 fills these in once the launch call above is confirmed (kept as the explicit contract):
-    #   reconstruction FVU / variance_explained are computed in unit 2/3 (after training + after the
-    #   sparsify->reconstruction glue is verified), NOT fabricated here.
-    return {  # pragma: no cover  (unreachable until the unit-2 launch is wired on Modal)
+    # Verified (ADR-0004 unit-2 E4 on sparsify 1.3.0): Trainer.fit() launches training; the Trainer
+    # writes the trained dictionary under save_dir/run_name (TrainConfig.save_dir + run_name +
+    # save_every/save_best). `sparsify` is unused here (launch needs only the trainer) but kept
+    # in the signature for forward-compat (a future load_from_disk reload). Per-coder reconstruction
+    # (FVU/variance-explained) is computed at eval time (unit 3), not fabricated here.
+    _ = sparsify
+    trainer.fit()
+    return {
         "kind": settings["kind"],
         "model": settings["model"],
         "layer": layer,
@@ -298,5 +297,4 @@ def _launch_train_and_save(
         "skip_connection": settings["skip_connection"],
         "run_name": settings["run_name"],
         "save_path": save_path,
-        "reconstruction_note": "FVU/variance_explained computed in unit 2/3 (ADR-0004).",
     }

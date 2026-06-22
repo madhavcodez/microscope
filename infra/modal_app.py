@@ -69,6 +69,9 @@ hf_cache = modal.Volume.from_name("microscope-hf-cache", create_if_missing=True)
 CACHE = {"/root/.cache/huggingface": hf_cache}
 CACHE_ENV = {"HF_HOME": "/root/.cache/huggingface", "HF_HUB_ENABLE_HF_TRANSFER": "0"}
 
+# Persistent store for trained dictionaries (Phase 2) so Phase 3 eval can reload them across runs.
+artifacts_vol = modal.Volume.from_name("microscope-artifacts", create_if_missing=True)
+
 
 @app.function(
     image=base_image, gpu="L4", secrets=[HF_SECRET], volumes=CACHE, timeout=1800, retries=0
@@ -138,13 +141,101 @@ def reproduce_recon(layer: int = 12, width: str = "16k", n_docs: int = 128, seq_
     return out
 
 
+@app.function(image=full_image, secrets=[HF_SECRET], timeout=1200)
+def probe_sparsify2() -> dict[str, str]:
+    """E4: sparsify training flow — data tokenization helper + Trainer launch method + dataset type."""
+    import inspect
+
+    import sparsify
+
+    out: dict[str, str] = {}
+    # data submodule: how to tokenize/chunk a HF dataset for the Trainer
+    try:
+        from sparsify import data as sdata
+
+        out["sparsify.data.public"] = ", ".join(n for n in dir(sdata) if not n.startswith("_"))[:400]
+        for fn in ("chunk_and_tokenize", "MemmapDataset"):
+            obj = getattr(sdata, fn, None)
+            if obj is not None:
+                try:
+                    out[f"data.{fn}()"] = f"{fn}{inspect.signature(obj)}"[:320]
+                except (ValueError, TypeError):
+                    out[f"data.{fn}"] = f"(type {type(obj).__name__})"
+    except Exception as exc:  # noqa: BLE001
+        out["sparsify.data"] = f"FAIL: {type(exc).__name__}: {str(exc)[:120]}"
+
+    # Trainer: launch method (.fit / .train / .run?) + __init__ signature
+    tr = sparsify.Trainer
+    out["Trainer.methods"] = ", ".join(
+        m for m in dir(tr) if not m.startswith("_")
+    )[:300]
+    for m in ("fit", "train", "run"):
+        meth = getattr(tr, m, None)
+        if callable(meth):
+            try:
+                out[f"Trainer.{m}()"] = f"{m}{inspect.signature(meth)}"[:200]
+            except (ValueError, TypeError):
+                out[f"Trainer.{m}"] = "exists"
+    try:
+        out["Trainer.__init__"] = f"{inspect.signature(tr.__init__)}"[:300]
+    except (ValueError, TypeError):
+        pass
+
+    for k, v in out.items():
+        print(f"{k}\n    {v}")
+    return out
+
+
 @app.function(image=pkg_image, timeout=600)
 def pkg_smoke() -> dict[str, str]:
     """Verify the local microscope package is importable inside Modal (the unit-2 integration path)."""
     import microscope
     from microscope.config import reproduction_logged  # exists today; confirms package code shipped
 
-    return {"version": microscope.__version__, "reproduction_logged_importable": str(callable(reproduction_logged))}
+    return {"version": microscope.__version__, "rl_importable": str(callable(reproduction_logged))}
+
+
+@app.function(
+    image=pkg_image,
+    gpu="L4",
+    secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol},
+    timeout=3600,
+    retries=0,
+)
+def train_coder_modal(config_dict: dict, kind: str = "sae") -> dict:
+    """Phase 2: train an SAE or skip-transcoder on Modal via the verified microscope.saes.train wrapper.
+
+    Persists the trained dictionary to the artifacts Volume so Phase-3 eval can reload it. Returns the
+    metrics dict + a listing of the saved files (the smoke's save/load confirmation)."""
+    import glob
+    import os
+
+    from microscope.config import RunConfig
+    from microscope.saes.train import train_coder
+
+    # Redirect the dictionary save into the mounted persistent Volume (overrides the YAML save_dir).
+    cfg = RunConfig(**{**config_dict, "save_dir": "/root/outputs/coders"})
+    result = train_coder(cfg, kind)  # type: ignore[arg-type]
+
+    save_path = result.get("save_path", "")
+    all_paths = sorted(glob.glob(save_path + "/**", recursive=True))
+    result["saved_files"] = [p.replace("/root/outputs/", "") for p in all_paths if os.path.isfile(p)][:20]
+    result["n_saved_files"] = sum(1 for p in all_paths if os.path.isfile(p))
+    artifacts_vol.commit()
+    print("TRAIN RESULT:", result)
+    return result
+
+
+@app.local_entrypoint()
+def train_main(config: str, kind: str = "sae") -> None:
+    """Run a training job: modal run infra/modal_app.py::train_main --config <yaml> --kind sae|transcoder."""
+    import yaml
+
+    with open(config) as fh:
+        config_dict = yaml.safe_load(fh)
+    result = train_coder_modal.remote(config_dict, kind)
+    print("FINAL TRAIN RESULT:", result)
 
 
 @app.function(image=full_image, secrets=[HF_SECRET], timeout=1200)
