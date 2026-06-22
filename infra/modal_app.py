@@ -834,3 +834,62 @@ def saebench_sparse_probing(
     }
     print("SAEBENCH SPARSE-PROBING RESULT:", out)
     return out
+
+
+@app.function(
+    image=pkg_image, secrets=[HF_SECRET], volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=900
+)
+def probe_phase3_glue() -> dict:
+    """E4 (Phase 3): verify how a sparsify-trained dict feeds delphi (load_sparsify) + assess SAEBench.
+
+    Reads the trained Gemma SAE from the artifacts Volume and inspects the delphi loader contract +
+    the sparsify coder's interface (to decide whether SAEBench needs an adapter)."""
+    import glob
+    import importlib
+    import inspect
+    import os
+
+    out: dict = {}
+    sae_path = "/root/outputs/coders/train_gemma2_2b_l12-sae"
+    out["sae_dir_exists"] = str(os.path.isdir(sae_path))
+    out["sae_files"] = [
+        p.replace("/root/outputs/", "")
+        for p in glob.glob(sae_path + "/**", recursive=True)
+        if os.path.isfile(p)
+    ][:10]
+
+    # 1) delphi's sparsify loader (the auto-interp glue)
+    try:
+        sc = importlib.import_module("delphi.sparse_coders")
+        for fn in ("load_sparse_coders", "load_hooks_sparse_coders", "load_sparsify"):
+            obj = getattr(sc, fn, None)
+            if obj is not None and callable(obj):
+                try:
+                    out[f"delphi.sparse_coders.{fn}()"] = f"{fn}{inspect.signature(obj)}"[:260]
+                except (ValueError, TypeError):
+                    out[f"delphi.sparse_coders.{fn}"] = "callable (no sig)"
+        mod = importlib.import_module("delphi.sparse_coders.load_sparsify")
+        out["delphi.load_sparsify.module"] = ", ".join(
+            n for n in dir(mod) if not n.startswith("_")
+        )[:300]
+    except Exception as exc:  # noqa: BLE001
+        out["delphi.sparse_coders"] = f"FAIL: {type(exc).__name__}: {str(exc)[:140]}"
+
+    # 2) load the trained sparsify dict + inspect its interface (for SAEBench compatibility)
+    try:
+        import sparsify
+
+        coder = sparsify.SparseCoder.load_from_disk(sae_path + "/layers.12", device="cpu")
+        out["loaded_coder_type"] = type(coder).__name__
+        out["coder_cfg_type"] = type(getattr(coder, "cfg", None)).__name__
+        out["coder_attrs"] = ", ".join(
+            a for a in dir(coder)
+            if not a.startswith("_")
+            and any(s in a.lower() for s in ("encode", "decode", "cfg", "w_dec", "w_enc", "d_in", "num_latents", "forward"))
+        )[:300]
+    except Exception as exc:  # noqa: BLE001
+        out["load_coder"] = f"FAIL: {type(exc).__name__}: {str(exc)[:180]}"
+
+    for k, v in out.items():
+        print(f"{k}\n    {v}")
+    return out
