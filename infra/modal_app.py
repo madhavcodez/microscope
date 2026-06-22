@@ -1023,6 +1023,18 @@ def auto_interp_custom(run_name: str, layer: int = 12, max_latents: int = 100,
     if not os.path.isdir(safe_dst):
         shutil.copytree(safe_src, safe_dst)
 
+    # delphi loads the sparsify coder on CPU by default while the model runs on CUDA -> device
+    # mismatch inside encode (x - b_dec). Wrap the loader delphi calls to force the coder onto CUDA.
+    import sparsify
+
+    _orig_load = sparsify.SparseCoder.load_from_disk
+
+    def _load_cuda(*a, **k):
+        k.setdefault("device", "cuda")
+        return _orig_load(*a, **k)
+
+    sparsify.SparseCoder.load_from_disk = _load_cuda
+
     name = f"ai-{tag}"
     run_cfg = RunConfig(
         name=name,
