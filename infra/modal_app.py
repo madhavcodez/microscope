@@ -1315,3 +1315,151 @@ def probing_eval(run_name: str, randomize: bool = False, layer: int = 12,
     artifacts_vol.commit()
     print("PROBING RESULT:", out)
     return out
+
+
+@app.function(
+    image=pkg_image, gpu="L4", secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=2400, retries=0,
+)
+def steer_eval(layer: int = 12, n_per_class: int = 200, n_gen: int = 16, max_new: int = 32) -> dict:
+    """Control B (ADR-0005): SAE-feature steering vs difference-of-means, on a profession concept.
+
+    Metric: fraction of generations the concept probe labels as the target class, at the strongest
+    steering coefficient that keeps mean perplexity <= 1.5x the unsteered baseline (fluency bound).
+    Head-to-head SAE-feature vs diff-of-means with a bootstrap CI on the success-rate difference."""
+    import os
+
+    import numpy as np
+    import sparsify
+    import torch
+    from datasets import load_dataset
+    from sklearn.linear_model import LogisticRegression
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    dev = "cuda"
+    sae = sparsify.SparseCoder.load_from_disk(
+        f"/root/outputs/coders/train_gemma2_2b_l12-sae/layers.{layer}", device=dev
+    ).to(dev, torch.bfloat16)
+    d_sae = int(sae.cfg.num_latents)
+    model = AutoModelForCausalLM.from_pretrained(
+        "google/gemma-2-2b", torch_dtype=torch.bfloat16, token=token
+    ).to(dev).eval()
+    tok = AutoTokenizer.from_pretrained("google/gemma-2-2b", token=token)
+    layers = model.model.layers
+
+    # --- collect labelled resid@L (mean-pooled) for the two professions (concept = class A vs B) ---
+    ds = load_dataset("LabHC/bias_in_bios", split="train")
+    from collections import Counter
+    top2 = [c for c, _ in Counter(ds["profession"]).most_common(2)]
+    buf = {c: [] for c in top2}
+    cap: dict = {}
+
+    def grab_resid(ids):
+        h = layers[layer].register_forward_hook(
+            lambda m, i, o: cap.__setitem__("y", (o[0] if isinstance(o, tuple) else o))
+        )
+        model(ids)
+        h.remove()
+        return cap["y"][0, 1:].float()
+
+    def dense(x):
+        enc = sae.encode(x.to(torch.bfloat16))
+        if torch.is_tensor(enc) and enc.shape[-1] == d_sae:
+            return enc.float()
+        ta, ti = getattr(enc, "top_acts", enc[0]), getattr(enc, "top_indices", enc[1])
+        out = torch.zeros(x.shape[0], d_sae, device=x.device); out.scatter_(1, ti.long(), ta.float())
+        return out
+
+    feats, raws, ys = [], [], []
+    with torch.no_grad():
+        for tx, lb in zip(ds["hard_text"], ds["profession"]):
+            if lb in buf and len(buf[lb]) < n_per_class and tx and tx.strip():
+                buf[lb].append(1)
+                ids = tok(tx, return_tensors="pt", truncation=True, max_length=64).input_ids.to(dev)
+                r = grab_resid(ids)
+                feats.append(dense(r).mean(0).cpu().numpy())
+                raws.append(r.mean(0).cpu().numpy())
+                ys.append(0 if lb == top2[0] else 1)
+    feats, raws, ys = np.array(feats), np.array(raws), np.array(ys)
+    target = 1  # steer toward class top2[1]
+    probe = LogisticRegression(max_iter=2000, C=0.5).fit(feats, ys)
+
+    # --- directions: SAE feature most predictive of target, and difference-of-means ---
+    top_feat = int(np.argmax(probe.coef_[0]))  # SAE latent most positively tied to target
+    sae_dir = sae.W_dec[top_feat].float().detach()
+    sae_dir = sae_dir / sae_dir.norm()
+    dom = torch.tensor(raws[ys == 1].mean(0) - raws[ys == 0].mean(0), device=dev, dtype=torch.float32)
+    dom = dom / dom.norm()
+    resid_rms = float(np.linalg.norm(raws, axis=1).mean())
+
+    prompt_ids = tok("My favorite", return_tensors="pt").input_ids.to(dev)
+
+    def gen_with(direction, coef):
+        vec = (coef * resid_rms) * direction.to(torch.bfloat16)
+        def hook(m, i, o):
+            if isinstance(o, tuple):
+                return (o[0] + vec, *o[1:])
+            return o + vec
+        outs = []
+        if coef == 0:
+            handle = None
+        else:
+            handle = layers[layer].register_forward_hook(hook)
+        try:
+            for _ in range(n_gen):
+                g = model.generate(prompt_ids, max_new_tokens=max_new, do_sample=True,
+                                   temperature=0.8, top_p=0.95, pad_token_id=tok.eos_token_id)
+                outs.append(g)
+        finally:
+            if handle is not None:
+                handle.remove()
+        return outs
+
+    def evaluate(gens):
+        succ, ppls = [], []
+        with torch.no_grad():
+            for g in gens:
+                txt_ids = g
+                # perplexity (unsteered model loss on the full sequence)
+                loss = model(txt_ids, labels=txt_ids).loss
+                ppls.append(float(torch.exp(loss)))
+                # concept class via probe on resid@L features
+                r = grab_resid(txt_ids)
+                pc = int(probe.predict(dense(r).mean(0).cpu().numpy()[None])[0])
+                succ.append(1 if pc == target else 0)
+        return np.array(succ), np.array(ppls)
+
+    base_succ, base_ppl = evaluate(gen_with(sae_dir, 0.0))
+    base_ppl_mean = float(base_ppl.mean())
+    fluency_cap = 1.5 * base_ppl_mean
+
+    results = {"baseline_ppl": round(base_ppl_mean, 2), "baseline_success": round(float(base_succ.mean()), 3),
+               "fluency_cap_ppl": round(fluency_cap, 2), "target_class": int(top2[target]),
+               "top_feature": top_feat, "resid_rms": round(resid_rms, 1), "by_direction": {}}
+    coefs = [2.0, 4.0, 8.0]
+    for name, d in (("sae_feature", sae_dir), ("difference_of_means", dom)):
+        best = {"coef": 0.0, "success": float(base_succ.mean()), "ppl": base_ppl_mean, "succ_arr": base_succ.tolist()}
+        for c in coefs:
+            s, pp = evaluate(gen_with(d, c))
+            if pp.mean() <= fluency_cap and s.mean() >= best["success"]:
+                best = {"coef": c, "success": float(s.mean()), "ppl": float(pp.mean()), "succ_arr": s.tolist()}
+        results["by_direction"][name] = {k: (round(v, 3) if isinstance(v, float) else v) for k, v in best.items() if k != "succ_arr"}
+        results["by_direction"][name]["succ_arr"] = best["succ_arr"]
+
+    # bootstrap CI of the success-rate difference (SAE - dom) at each one's fluency-capped best coef
+    a = np.array(results["by_direction"]["sae_feature"]["succ_arr"], float)
+    b = np.array(results["by_direction"]["difference_of_means"]["succ_arr"], float)
+    rng = np.random.default_rng(0)
+    boot = np.array([a[rng.integers(0, len(a), len(a))].mean() - b[rng.integers(0, len(b), len(b))].mean() for _ in range(10000)])
+    lo, hi = np.percentile(boot, [2.5, 97.5])
+    results["sae_minus_dom"] = round(float(a.mean() - b.mean()), 3)
+    results["sae_minus_dom_ci95"] = [round(float(lo), 3), round(float(hi), 3)]
+    results["verdict"] = "SAE>baseline" if lo > 0 else ("baseline>SAE" if hi < 0 else "inconclusive (CI incl 0)")
+    import json as _json
+    with open("/root/outputs/steering.json", "w") as fh:
+        _json.dump(results, fh)
+    artifacts_vol.commit()
+    print("STEER RESULT:", {k: v for k, v in results.items() if k != "by_direction"})
+    print("BY DIR:", {n: {k: v for k, v in d.items() if k != "succ_arr"} for n, d in results["by_direction"].items()})
+    return results
