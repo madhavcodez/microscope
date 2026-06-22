@@ -1,14 +1,34 @@
 # PROGRESS
 
 ## Current phase
-**PHASE 2 IN PROGRESS (resume prompt: Phases 2-4).** Course corrections 0a/0b/0c DONE: ADR-0002 fixed;
-R1 mechanical gate merged (train exits 3 without a reproduced row, QC APPROVE); ADR-0004 (sparsify) +
-sparsify 1.3.0 API verified on Modal. **PHASE 2 COMPLETE** — sparsify wrapper (SAE=transcode/skip F/F, transcoder T/T, shared width/k) +
-Pythia smokes + both Gemma-2-2B custom coders trained on layer 12 (width 16384, k=64, ~10M tokens, bf16):
-train-g2-sae + train-g2-tc, saved/loadable on the artifacts Volume (identical recipe => fair head-to-head).
-First Gemma runs OOM'd (fp32) => fixed bf16+batch8. Phase-3 glue de-risked (delphi native sparsify loader;
-SparseCoder reloads with sae_lens-like interface => SAEBench needs only a thin cfg adapter). NOW STARTING
-PHASE 3 (auto-interp + SAEBench head-to-head). Spend ≈ $4-5 of $30.
+**PHASES 2-4 COMPLETE — PAUSED here per user (2026-06-22). Phase 5 (circuit) + Phase 6 (write-up) NOT started.**
+Spend ≈ $9-11 of $30.
+
+- **Phase 2 DONE:** sparsify wrapper (SAE=transcode/skip F/F, transcoder T/T, shared width/k) + Pythia smokes
+  + both Gemma-2-2B custom coders trained @ L12 (width 16384, k=64, ~10M tokens, bf16): train-g2-sae,
+  train-g2-tc, saved on the artifacts Volume (identical recipe => fair head-to-head). Gemma OOM (fp32) fixed bf16+batch8.
+- **Phase 3 DONE (head-to-head = INCONCLUSIVE, pre-registered):** reconstruction SAE VE=0.514 (CI [.507,.519]);
+  transcoder own-objective recon NOT cleanly isolable externally (limitation, documented — sparsify transcode
+  hooks; ForwardOutput.fvu is input-recon inflated by skip). Auto-interp (delphi, custom dicts; fixed cpu->cuda
+  + fp32->bf16 loader bugs): SAE det 0.540/fuzz 0.523 (n=58) vs TC det 0.539/fuzz 0.546 (n=61); both Δ bootstrap
+  CIs include 0 => no significant difference (scorer-limited, matches repro-004). SAEBench on custom coders =
+  SAE-only (resid-probing; transcoder N/A) + needs sae_lens adapter => deferred.
+- **Phase 4 DONE (controls = the differentiator):**
+  - Control A randomized-model (ADR-0005): PRIMARY (scorer-independent) = CONCLUSIVE. SAE-feature linear probe
+    on bias_in_bios professions: real-model SAE 0.933 vs random-model SAE 0.861; PAIRED gap +0.072, CI95
+    [+0.033,+0.117] EXCLUDES 0 => real SAE has model-learned structure beyond token stats. Honest nuance: random
+    already 0.861 => most probing signal is TOKEN-level (preserved embeddings); learned adds modest +7pts.
+    SECONDARY auto-interp gap = N/A (delphi can't score degenerate random-SAE features).
+  - Control B steering (SAE-feat vs difference_of_means): ran end-to-end but INCONCLUSIVE — baseline already
+    0.81 (ceiling) + no coef beat baseline within fluency cap => SAE-dom diff 0.0 CI [-0.25,+0.25]. Consistent
+    w/ AxBench. Follow-up: calibrated baseline + finer sweep.
+- New infra fns: recon_eval, auto_interp_custom, probe_coder_fvu, probe_saebench_adapter, probing_eval,
+  steer_eval, train --randomize. ADR-0005 added. All logged in EXPERIMENTS.md; REPORT.md has Phase 2-4 sections.
+
+## Possible follow-ups (NOT started — for a later prompt)
+- Phase 5: one feature circuit (sparse-feature-circuits). Phase 6: full write-up.
+- Calibrated Control-B steering sweep; sparsify->sae_lens adapter for full SAEBench on custom coders;
+  stronger auto-interp scorer (the near-chance bottleneck throughout).
 
 ## Phase 3 pre-registration (R3 — COMMITTED 2026-06-22 BEFORE any eval run; do not change post-hoc)
 - **Coders compared:** train-g2-sae vs train-g2-tc (Gemma-2-2B L12, width 16384, k=64, identical recipe).

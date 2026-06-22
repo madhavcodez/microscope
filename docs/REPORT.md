@@ -1,9 +1,10 @@
 <!--
 REPORT.md — the finding. Every number here traces to a row in docs/EXPERIMENTS.md (R5).
-Phase 1 only. Phases 2-6 (custom training, controls, circuit) are NOT done — see "What's next".
+Phases 1-4 done (reproduction, custom coders, head-to-head, controls). Phase 5 (circuit) +
+Phase 6 (full write-up) NOT done — see "Phases 2-4 — done; PAUSED here".
 -->
 
-# MicroScope — Report (Phase 1)
+# MicroScope — Report (Phases 1–4)
 
 ## The question
 
@@ -129,19 +130,29 @@ control both confirms real structure *and* quantifies how much "interpretability
 examples), so the real-vs-random auto-interp gap is not reported. Consistent with the scorer-limited
 auto-interp throughout — which is exactly why the primary axis was designed to be scorer-independent.
 
-### Control B — steering vs difference-of-means
-Pre-registered in ADR-0005 (SAE feature vs `difference_of_means`, nurse/professor concept, success rate
-under a perplexity-fluency bound). See "What's next".
+### Control B — steering vs difference-of-means — **INCONCLUSIVE** (ran end-to-end)
 
-## What's next
+Implemented per ADR-0005: steer generations at layer 12 with (a) the SAE feature most tied to the target
+profession vs (b) the `difference_of_means` direction, scoring concept-induction success (the probe) under
+a fluency bound (perplexity ≤ 1.5× baseline), with a coefficient sweep. **Result: inconclusive.** The
+unsteered baseline already classifies as the target **0.81** of the time (a probe/prompt ceiling), and
+across coefficients {2, 4, 8}×resid-RMS no steering improved success *within the fluency cap* (both
+directions' best-within-fluency coefficient was 0 = baseline). So the SAE-vs-diff-of-means success
+difference is **0.0, 95% CI [−0.25, +0.25]** — neither beats the other or the baseline here. This is an
+honest degenerate outcome (consistent with AxBench's finding that a simple baseline often matches the
+SAE): the steering *machinery* works, but this setup hit a baseline ceiling + coefficient-calibration
+limit. A discriminating steering result needs a lower-baseline prompt and a finer coefficient sweep
+(follow-up).
 
-**Control B (steering)** is the remaining Phase-4 unit. **Phase 5** (one feature circuit) and **Phase 6**
-(full write-up) are deferred to a later prompt. Open questions/risks: PHASE1_RETROSPECTIVE.md. A
-follow-up could also build the sparsify→sae_lens adapter to put the custom coders through the full
-SAEBench suite (Phase-3 SAEBench was SAE-only / deferred).
+## Phases 2–4 — done; PAUSED here (per user)
+
+Phases 2–4 are complete (Phase 4 = both controls run: A conclusive, B inconclusive). **Phase 5** (one
+feature circuit) and **Phase 6** (full write-up) are deferred to a later prompt. Possible follow-ups:
+a calibrated steering sweep (Control B), the sparsify→sae_lens adapter to run the custom coders through
+the full SAEBench suite, and a stronger auto-interp scorer. Open questions/risks: PHASE1_RETROSPECTIVE.md.
 
 ## Reproducibility & cost
 
 Every number above maps to a row in [EXPERIMENTS.md](EXPERIMENTS.md) with its git commit, config,
-hardware, and seed. Total GPU spend through Phase 2 ≈ **$4–5 of $30** (Modal, per-second). The verified recipe
+hardware, and seed. Total GPU spend through Phase 4 ≈ **$9–11 of $30** (Modal, per-second). The verified recipe
 lives in `infra/modal_app.py`; the CPU-importable package mirror is in `src/microscope/`.
