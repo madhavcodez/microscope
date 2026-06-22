@@ -59,20 +59,33 @@ whether the interpretability is real.
 | SAE sparse-probing beats residual baseline | **reproduced** | repro-003 |
 | Auto-interp *pipeline* works on the pretrained SAE (local scorer) | **reproduced (method)** | repro-004 |
 | Auto-interp *absolute* detection/fuzz scores match the literature | **inconclusive** | scorer-size dependent (repro-004) |
-| Anything about custom-trained SAEs / transcoders, controls, or circuits | **not done** | Phases 2–6 |
+| Custom SAE + skip-transcoder trained on Gemma-2-2B (artifacts; no interp claim yet) | **novel (artifact)** | train-g2-sae, train-g2-tc |
+| SAE-vs-transcoder comparison, controls, circuit | **not done** | Phases 3–6 |
 
-Nothing novel is claimed yet — Phase 1 is reproduction only, by design (R1).
+Phase 1 claimed nothing novel (reproduction only, R1). Phase 2 produces novel *artifacts* but still
+makes no interpretability claim — those wait for Phase 3's evaluation.
 
-## What's next (Phases 2–6 — NOT started)
+## Phase 2 — custom SAE + skip-transcoder (training setup; novel artifacts, no claim yet)
 
-Custom SAE + skip-transcoder training (Phase 2), auto-interp + SAEBench head-to-head on the trained
-coders (Phase 3), the **controls** that are the project's differentiator — randomized-model baseline +
-steering-vs-difference-of-means (Phase 4), one feature circuit (Phase 5), and the full write-up
-(Phase 6). Open questions and risks are in [PHASE1_RETROSPECTIVE.md](PHASE1_RETROSPECTIVE.md) (notably:
-verifying skip-transcoder support in dictionary_learning, and the auto-interp scorer-size question).
+Two custom coders were trained on **Gemma-2-2B layer 12** with EleutherAI **sparsify** (ADR-0004) under
+an **identical recipe** so Phase 3's comparison is fair: TopK activation, **width 16,384**, **k=64**
+(exact L0), ~10M tokens of NeelNanda/pile-10k, bf16, on a Modal L4 (~25 min / ~$0.33 each). They differ
+only by the documented flags — the **SAE** has `transcode=False, skip_connection=False` (`train-g2-sae`);
+the **skip-transcoder** has both `True` (`train-g2-tc`). Both saved as loadable dictionaries. These are
+**novel artifacts, not yet a claim** — no reconstruction or interpretability number is asserted until
+Phase 3 evaluates them. (The ~10M-token budget is modest under the $30 cap, so absolute reconstruction
+will trail a production-scale SAE; the comparison's validity comes from the *identical* recipe/budget
+across the two coders, not from absolute scale.)
+
+## What's next (Phases 3–4)
+
+Phase 3: pre-register a random feature sample + metrics, then run auto-interp + SAEBench head-to-head
+(SAE vs skip-transcoder) with bootstrap CIs and honest labels. Phase 4 (the differentiator): the
+randomized-model control (probing-gap + auto-interp-gap) and steering vs difference-of-means. Phase 5
+(circuit) + Phase 6 (write-up) are deferred. Open questions/risks: PHASE1_RETROSPECTIVE.md.
 
 ## Reproducibility & cost
 
 Every number above maps to a row in [EXPERIMENTS.md](EXPERIMENTS.md) with its git commit, config,
-hardware, and seed. Total Phase-1 GPU spend ≈ **$2 of $30** (Modal, per-second). The verified recipe
+hardware, and seed. Total GPU spend through Phase 2 ≈ **$4–5 of $30** (Modal, per-second). The verified recipe
 lives in `infra/modal_app.py`; the CPU-importable package mirror is in `src/microscope/`.

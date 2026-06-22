@@ -3,10 +3,12 @@
 ## Current phase
 **PHASE 2 IN PROGRESS (resume prompt: Phases 2-4).** Course corrections 0a/0b/0c DONE: ADR-0002 fixed;
 R1 mechanical gate merged (train exits 3 without a reproduced row, QC APPROVE); ADR-0004 (sparsify) +
-sparsify 1.3.0 API verified on Modal. Phase-2 units 1-2 DONE: sparsify wrapper (SAE=transcode/skip F/F,
-transcoder T/T, shared width/k) + Pythia-70M SAE & transcoder smokes both pass (dicts saved to artifacts
-Volume). Units 3-4 (Gemma-2-2B SAE + skip-transcoder, layer 12, width 16k, k=64) RUNNING — first attempts
-OOM'd (gemma loaded fp32); fixed to bf16 + batch 8 + expandable_segments. Spend ≈ $4-5 of $30.
+sparsify 1.3.0 API verified on Modal. **PHASE 2 COMPLETE** — sparsify wrapper (SAE=transcode/skip F/F, transcoder T/T, shared width/k) +
+Pythia smokes + both Gemma-2-2B custom coders trained on layer 12 (width 16384, k=64, ~10M tokens, bf16):
+train-g2-sae + train-g2-tc, saved/loadable on the artifacts Volume (identical recipe => fair head-to-head).
+First Gemma runs OOM'd (fp32) => fixed bf16+batch8. Phase-3 glue de-risked (delphi native sparsify loader;
+SparseCoder reloads with sae_lens-like interface => SAEBench needs only a thin cfg adapter). NOW STARTING
+PHASE 3 (auto-interp + SAEBench head-to-head). Spend ≈ $4-5 of $30.
 Phase 1 COMPLETE earlier (R1 gate: repro-001/002 recon, repro-003 SAEBench, repro-004 auto-interp;
 REPORT.md + PHASE1_RETROSPECTIVE.md).
 
