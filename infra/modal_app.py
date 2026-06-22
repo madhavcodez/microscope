@@ -334,3 +334,163 @@ def gpu_smoke() -> dict[str, str]:
     for k, v in out.items():
         print(f"{k:18s} {v}")
     return out
+
+
+@app.function(
+    image=base_image, gpu="L4", secrets=[HF_SECRET], volumes=CACHE, timeout=2400, retries=0
+)
+def multi_layer_recon(
+    layers: str = "5,12,19", width: str = "16k", n_docs: int = 96, seq_len: int = 128
+) -> dict:
+    """Phase-1 reproduction (objective, no LLM): VE + L0 of canonical Gemma Scope SAEs across layers.
+
+    Reproduces the documented Gemma Scope trend across depth. One model load; capture all needed
+    resid_post hooks in a single forward per doc. TransformerLens recipe, BOS excluded (ADR-0003)."""
+    import torch
+    from datasets import load_dataset
+    from sae_lens import SAE
+    from transformer_lens import HookedTransformer
+
+    dev = "cuda"
+    layer_list = [int(x) for x in layers.split(",")]
+    hooks = {ly: f"blocks.{ly}.hook_resid_post" for ly in layer_list}
+    model = HookedTransformer.from_pretrained("gemma-2-2b", dtype="bfloat16").to(dev)
+    saes = {}
+    for ly in layer_list:
+        loaded = SAE.from_pretrained(
+            "gemma-scope-2b-pt-res-canonical",
+            f"layer_{ly}/width_{width}/canonical",
+            device=dev,
+            dtype="bfloat16",
+        )
+        saes[ly] = loaded[0] if isinstance(loaded, tuple) else loaded
+
+    ds = load_dataset("NeelNanda/pile-10k", split=f"train[:{n_docs}]")
+    texts = [t for t in ds["text"] if t and t.strip()]
+    max_layer = max(layer_list)
+    stats = {ly: {"sx": 0.0, "sx2": 0.0, "sse": 0.0, "l0": 0.0} for ly in layer_list}
+    n_tok = {ly: 0 for ly in layer_list}
+    with torch.no_grad():
+        for text in texts:
+            toks = model.to_tokens(text)[:, :seq_len]
+            _, cache = model.run_with_cache(
+                toks,
+                names_filter=list(hooks.values()),
+                stop_at_layer=max_layer + 1,
+                return_type=None,
+            )
+            for ly in layer_list:
+                x = cache[hooks[ly]][0, 1:].float()  # drop BOS
+                if x.shape[0] == 0:
+                    continue
+                feats = saes[ly].encode(x.to(torch.bfloat16))
+                recon = saes[ly].decode(feats).float()
+                s = stats[ly]
+                s["sx"] += x.sum(0).double()
+                s["sx2"] += (x * x).sum(0).double()
+                s["sse"] += ((x - recon) ** 2).sum().double()
+                s["l0"] += (feats > 0).float().sum().item()
+                n_tok[ly] += x.shape[0]
+
+    results = {}
+    for ly in layer_list:
+        s = stats[ly]
+        var = (s["sx2"] - s["sx"].pow(2) / n_tok[ly]).sum()
+        results[f"layer_{ly}"] = {
+            "variance_explained": round((1 - s["sse"] / var).item(), 4),
+            "mean_l0": round(s["l0"] / n_tok[ly], 1),
+            "n_tokens": n_tok[ly],
+        }
+        print(f"layer_{ly}: {results[f'layer_{ly}']}")
+    return {"width": width, "results": results}
+
+
+@app.function(
+    image=full_image, gpu="L4", secrets=[HF_SECRET], volumes=CACHE, timeout=3600, retries=0
+)
+def auto_interp(
+    layer: int = 12,
+    width: str = "16k",
+    max_latents: int = 20,
+    scorer_model: str = "Qwen/Qwen2.5-1.5B-Instruct",
+    n_tokens: int = 200_000,
+) -> dict:
+    """Phase-1 auto-interp: run delphi (LOCAL Offline scorer, no paid API) on the Gemma Scope SAE.
+
+    Uses delphi's native Gemma Scope path (verified): sparse_model='google/gemma-scope-2b-pt-res',
+    hookpoint='layer_<L>/width_<W>/average_l0_<L0>'. Reports aggregate detection + fuzzing accuracy.
+    Scores from a small local scorer are NOT directly comparable to papers using frontier scorers —
+    label accordingly (R4). Capped at <=500 latents (RULES.md C3)."""
+    import asyncio
+    import os
+    from pathlib import Path
+
+    from delphi.__main__ import run
+    from delphi.config import CacheConfig, ConstructorConfig, RunConfig, SamplerConfig
+    from delphi.log.result_analysis import get_agg_metrics, load_data
+    from huggingface_hub import HfApi
+
+    assert max_latents <= 500, "auto-interp cap is 500 latents (RULES.md C3)"
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+
+    # delphi needs a concrete average_l0 dir (no 'canonical') — discover a valid one near L0~82.
+    files = HfApi().list_repo_files("google/gemma-scope-2b-pt-res", token=token)
+    prefix = f"layer_{layer}/width_{width}/average_l0_"
+    l0s = sorted({int(f.split(prefix)[1].split("/")[0]) for f in files if f.startswith(prefix)})
+    if not l0s:
+        raise RuntimeError(f"No average_l0 dirs found for {prefix} in gemma-scope-2b-pt-res")
+    l0 = min(l0s, key=lambda v: abs(v - 82))
+    hookpoint = f"layer_{layer}/width_{width}/average_l0_{l0}"
+    print(f"hookpoint={hookpoint}  available_l0s={l0s}")
+
+    name = f"g2-l{layer}-w{width}-l0{l0}"
+    run_cfg = RunConfig(
+        name=name,
+        model="google/gemma-2-2b",
+        sparse_model="google/gemma-scope-2b-pt-res",
+        hookpoints=[hookpoint],
+        explainer_provider="offline",
+        explainer_model=scorer_model,
+        explainer_model_max_len=4096,
+        explainer="default",
+        scorers=["detection", "fuzz"],
+        max_latents=max_latents,
+        filter_bos=True,
+        num_gpus=1,
+        max_memory=0.85,
+        seed=22,
+        hf_token=token,
+        cache_cfg=CacheConfig(
+            dataset_repo="NeelNanda/pile-10k",
+            dataset_split="train",
+            dataset_column="text",
+            batch_size=8,
+            cache_ctx_len=256,
+            n_tokens=n_tokens,
+            n_splits=5,
+        ),
+        constructor_cfg=ConstructorConfig(
+            example_ctx_len=32,
+            min_examples=50,
+            n_non_activating=50,
+            non_activating_source="random",
+        ),
+        sampler_cfg=SamplerConfig(
+            n_examples_train=20,
+            n_examples_test=40,
+            n_quantiles=10,
+            train_type="quantiles",
+            test_type="quantiles",
+        ),
+    )
+    asyncio.run(run(run_cfg))
+
+    scores_path = Path.cwd() / "results" / name / "scores"
+    latent_df, counts = load_data(scores_path, run_cfg.hookpoints)
+    agg = get_agg_metrics(latent_df, counts)
+    out: dict = {"hookpoint": hookpoint, "scorer": scorer_model, "max_latents": max_latents}
+    for score_type, df in agg.groupby("score_type"):
+        out[f"{score_type}_accuracy"] = round(float(df["accuracy"].mean()), 4)
+    out["n_latents_scored"] = int(len(latent_df["latent"].unique())) if len(latent_df) else 0
+    print("AUTO-INTERP RESULT:", out)
+    return out
