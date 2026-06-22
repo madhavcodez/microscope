@@ -56,6 +56,10 @@ full_image = base_image.run_commands(
     "pip uninstall -y flashinfer-python flashinfer || true",
 )
 
+# Image variant that also bundles the local `microscope` package, so Modal training/eval functions can
+# call the verified package wrappers (microscope.saes.train, etc.) instead of duplicating logic.
+pkg_image = full_image.add_local_python_source("microscope")
+
 app = modal.App("microscope-infra")
 
 HF_SECRET = modal.Secret.from_name("hf-token")
@@ -132,6 +136,15 @@ def reproduce_recon(layer: int = 12, width: str = "16k", n_docs: int = 128, seq_
     for k, v in out.items():
         print(f"{k:20s} {v}")
     return out
+
+
+@app.function(image=pkg_image, timeout=600)
+def pkg_smoke() -> dict[str, str]:
+    """Verify the local microscope package is importable inside Modal (the unit-2 integration path)."""
+    import microscope
+    from microscope.config import reproduction_logged  # exists today; confirms package code shipped
+
+    return {"version": microscope.__version__, "reproduction_logged_importable": str(callable(reproduction_logged))}
 
 
 @app.function(image=full_image, secrets=[HF_SECRET], timeout=1200)
