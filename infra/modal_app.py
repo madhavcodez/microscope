@@ -550,56 +550,39 @@ def auto_interp(
     # params path, so load_data(hookpoints=[params_path]) finds nothing. Read the raw per-latent
     # score files directly and aggregate defensively (schema is also printed for transparency).
     import glob
+    import re
 
-    def _collect_correct(obj: object, bucket: list[bool]) -> None:
-        """Recursively find per-example correctness signals anywhere in a score structure."""
-        if isinstance(obj, dict):
-            if isinstance(obj.get("correct"), bool):
-                bucket.append(obj["correct"])
-            elif "prediction" in obj and ("ground_truth" in obj or "activating" in obj):
-                gt = obj.get("ground_truth", obj.get("activating"))
-                try:
-                    bucket.append(bool(obj["prediction"]) == bool(gt))
-                except (TypeError, ValueError):
-                    pass
-            for v in obj.values():
-                _collect_correct(v, bucket)
-        elif isinstance(obj, list):
-            for v in obj:
-                _collect_correct(v, bucket)
+    # delphi score files are JSON arrays of per-example records each with one "activating" (ground
+    # truth) and one "prediction" (scorer's call). Extract those booleans by regex straight from the
+    # raw text — robust to any JSON-parse quirk — and score balanced accuracy = mean(activating==pred).
+    act_re = re.compile(r'"activating":\s*(true|false)')
+    pred_re = re.compile(r'"prediction":\s*(true|false)')
 
     out: dict = {"hookpoint": hookpoint, "scorer": scorer_model, "max_latents": max_latents, "scores": {}}
     for scorer in ("detection", "fuzz"):
         sdir = Path.cwd() / "results" / name / "scores" / scorer
         files = glob.glob(str(sdir / "*"))
         per_latent_acc: list[float] = []
-        raw_sample = None
+        total_correct = total_examples = 0
         for fp in files:
             try:
                 text = open(fp).read()
             except OSError:
                 continue
-            if raw_sample is None and text.strip():
-                raw_sample = repr(text[:400])
-            data: object = None
-            try:
-                data = json.loads(text)
-            except Exception:  # noqa: BLE001 - maybe NDJSON
-                try:
-                    data = [json.loads(ln) for ln in text.splitlines() if ln.strip()]
-                except Exception:  # noqa: BLE001
-                    data = None
-            if data is None:
+            acts = act_re.findall(text)
+            preds = pred_re.findall(text)
+            n = min(len(acts), len(preds))
+            if n == 0:
                 continue
-            bucket: list[bool] = []
-            _collect_correct(data, bucket)
-            if bucket:
-                per_latent_acc.append(sum(bucket) / len(bucket))
+            correct = sum(1 for a, p in zip(acts[:n], preds[:n]) if a == p)
+            per_latent_acc.append(correct / n)
+            total_correct += correct
+            total_examples += n
         out["scores"][scorer] = {
-            "n_files": len(files),
-            "n_latents_with_acc": len(per_latent_acc),
-            "mean_accuracy": round(sum(per_latent_acc) / len(per_latent_acc), 4) if per_latent_acc else None,
-            "raw_sample": raw_sample,
+            "n_latents_scored": len(per_latent_acc),
+            "n_examples": total_examples,
+            "mean_accuracy_macro": round(sum(per_latent_acc) / len(per_latent_acc), 4) if per_latent_acc else None,
+            "accuracy_micro": round(total_correct / total_examples, 4) if total_examples else None,
         }
     print("AUTO-INTERP RESULT:", out)
     return out
