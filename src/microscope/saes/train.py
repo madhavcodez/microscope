@@ -229,6 +229,7 @@ def train_coder(config: RunConfig, kind: CoderKind) -> dict[str, Any]:
         "init_seeds": [settings["seed"]],
         "run_name": settings["run_name"],
         "save_dir": settings["save_dir"],
+        "log_to_wandb": False,  # no wandb key on Modal; metadata is logged to EXPERIMENTS.md (E3)
     }
     if settings["hookpoints"] is not None:
         train_kwargs["hookpoints"] = settings["hookpoints"]
