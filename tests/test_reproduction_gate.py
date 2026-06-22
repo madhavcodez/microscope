@@ -291,10 +291,12 @@ def test_train_blocked_exit_3_via_function_monkeypatch(
 
 
 def test_train_passes_r1_then_hits_gpu_gate_exit_2_via_real_parser(
-    tmp_path: Path, smoke_config_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, train_config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Arrange: a table WITH a 'reproduced' row opens R1 (real parser), so train proceeds to
-    # _prepare and then the GPU/E4 stub gate.
+    # _prepare and then the GPU/E4 gate. Uses the Phase-2 training config (width + k, ADR-0004) so
+    # the sparsify wrapper's validation passes and the run reaches the GPU gate (the Phase-1 smoke
+    # config lacks k and would fail validation first).
     repro = _write_table(
         tmp_path / "EXPERIMENTS.md",
         "| repro-001 | 2026-06-21 | reproduced | gemma scope recon |",
@@ -302,7 +304,7 @@ def test_train_passes_r1_then_hits_gpu_gate_exit_2_via_real_parser(
     monkeypatch.setattr("microscope.config.EXPERIMENTS_PATH", repro)
 
     # Act
-    result = runner.invoke(app, ["train", "--config", str(smoke_config_path)])
+    result = runner.invoke(app, ["train", "--config", str(train_config_path)])
 
     # Assert: past R1 (exit 2 not 3), GPU gate surfaced, prelude printed config identity.
     assert result.exit_code == 2
@@ -312,13 +314,14 @@ def test_train_passes_r1_then_hits_gpu_gate_exit_2_via_real_parser(
 
 
 def test_train_passes_r1_exit_2_via_function_monkeypatch(
-    smoke_config_path: Path, monkeypatch: pytest.MonkeyPatch
+    train_config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Arrange: force the gate open at the CLI boundary; must reach the GPU gate (exit 2).
+    # Arrange: force the gate open at the CLI boundary; with a valid Phase-2 config (width + k) the
+    # sparsify wrapper passes validation and must reach the GPU gate (exit 2).
     monkeypatch.setattr("microscope.cli.reproduction_logged", lambda: True)
 
     # Act
-    result = runner.invoke(app, ["train", "--config", str(smoke_config_path)])
+    result = runner.invoke(app, ["train", "--config", str(train_config_path)])
 
     # Assert
     assert result.exit_code == 2
@@ -326,9 +329,12 @@ def test_train_passes_r1_exit_2_via_function_monkeypatch(
 
 
 def test_train_r1_and_gpu_exit_codes_are_distinct(
-    tmp_path: Path, smoke_config_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, train_config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Arrange: run the same command under both gate states and capture both exit codes.
+    # Arrange: run the same command under both gate states and capture both exit codes. Uses the
+    # Phase-2 training config (width + k) so the open-gate path passes the sparsify wrapper's
+    # validation and reaches the GPU gate; the shut-gate path exits 3 at R1 before the config is
+    # ever loaded, so the same config is correct for both branches.
     norepro = _write_table(
         tmp_path / "norepro.md", "| n1 | 2026-06-21 | novel | x |"
     )
@@ -338,10 +344,10 @@ def test_train_r1_and_gpu_exit_codes_are_distinct(
 
     # Act: shut gate.
     monkeypatch.setattr("microscope.config.EXPERIMENTS_PATH", norepro)
-    shut = runner.invoke(app, ["train", "--config", str(smoke_config_path)])
+    shut = runner.invoke(app, ["train", "--config", str(train_config_path)])
     # Act: open gate.
     monkeypatch.setattr("microscope.config.EXPERIMENTS_PATH", repro)
-    open_ = runner.invoke(app, ["train", "--config", str(smoke_config_path)])
+    open_ = runner.invoke(app, ["train", "--config", str(train_config_path)])
 
     # Assert: R1 gate (3) and GPU gate (2) are different codes -> distinguishable failures.
     assert shut.exit_code == 3

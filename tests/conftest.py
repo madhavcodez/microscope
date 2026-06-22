@@ -24,5 +24,23 @@ def configs_dir() -> Path:
 
 @pytest.fixture()
 def smoke_config_path() -> Path:
-    """A real, committed config that loads cleanly (Pythia-70M smoke test)."""
+    """A real, committed config that loads cleanly (Pythia-70M smoke test).
+
+    This is the Phase-1 config: it has width but intentionally NO ``k`` (Phase 1 used a sparsity
+    target, not a TopK ``k``). It is the right fixture for the config/CLI-prelude/R1-gate tests that
+    only need *a config that loads*; for exercising the Phase-2 ``train`` command past validation,
+    use :func:`train_config_path` (which has the ``k`` the sparsify wrapper requires).
+    """
     return CONFIGS_DIR / "pythia70m_smoke.yaml"
+
+
+@pytest.fixture()
+def train_config_path() -> Path:
+    """The Phase-2 training config (ADR-0004): has width + k for the sparsify wrapper.
+
+    ``microscope.saes.train.coder_config_dict`` requires an explicit ``width`` AND ``k`` (a fair
+    SAE-vs-transcoder comparison needs both stated). The Phase-1 ``pythia70m_smoke.yaml`` lacks
+    ``k``, so the ``train`` command now fails validation on it *before* the GPU gate. Tests that
+    want ``train`` to pass validation and reach the GPU/E4 gate (exit 2) must use this config.
+    """
+    return CONFIGS_DIR / "train_pythia70m_smoke.yaml"

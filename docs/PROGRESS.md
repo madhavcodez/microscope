@@ -101,3 +101,48 @@ Phase 2 (custom SAE + transcoder training) NOT started.
     + mypy all clean on config.py + cli.py. NOTE: did NOT add unit tests (tester's unit). Coverage
     of the new branches is currently exercised only by my ad-hoc CliRunner check, not the committed
     suite — tester must add regression tests (see handoff). Did not commit (per instruction).
+- 2026-06-22 (coder): Phase 2 unit 1 — sparsify training wrapper + training YAMLs (ADR-0004). No
+  training run here (that is unit 2 on Modal). Heavy imports kept lazy; package still imports on CPU.
+  - src/microscope/saes/train.py REWRITTEN (was a `pending` stub):
+    * `coder_config_dict(config, kind) -> dict[str, Any]` — PURE (no sparsify/torch import); the
+      TESTABLE CORE. Maps RunConfig (+extra='allow' keys width/k/activation/batch_size/lr/save_dir/
+      run_name) to a flat sparsify-settings dict. THE KEY INVARIANT: SAE => transcode=False &
+      skip_connection=False; transcoder => both True; width(=>num_latents) and k(=>TopK L0) come from
+      the SAME config so SAE vs skip-transcoder is a fair head-to-head. Validates: kind in
+      {sae,transcoder}, width & k present + positive int (coerces "64"/64.0), activation in
+      {topk,groupmax}, layer not None, lr/batch_size sane — all raise ValueError (fail fast).
+    * `train_coder(config, kind) -> dict[str, Any]` — GPU-only. Validates via coder_config_dict
+      FIRST (fail fast on CPU before the GPU import), then lazy `import sparsify`; on ImportError
+      raises `GpuStackUnavailable` naming the Modal [gpu] image (mirrors
+      activations.harvest_resid_activations, NOT GpuImplementationPending). Builds SaeConfig +
+      TrainConfig from the flat dict, loads HF model (lazy `from transformers import AutoModel`) +
+      dataset (lazy `from datasets import load_dataset`, streaming), constructs
+      `Trainer(cfg, dataset, model)`, then delegates to helper `_launch_train_and_save`. The ONE
+      unresolved E4 item (sparsify launch method `.fit()` vs `.train()`, per ADR-0004 "confirmed on
+      Modal in unit 2") is isolated in that helper as a clearly-commented TODO + a GpuStackUnavailable
+      raise; the post-launch save (`Sae.save_to_disk`)/return-metrics shape is documented there for
+      unit 2. Type hints + docstrings (E5).
+  - experiments/configs/: NEW `train_pythia70m_smoke.yaml` (Pythia-70m-deduped, layer 3, width 4096,
+    k 32, n_tokens 500k) and `train_gemma2_2b_l12.yaml` (gemma-2-2b, layer 12, width 16384, k 64,
+    n_tokens 10M with a comment that the exact budget is cost-gated in unit 3). One YAML per model;
+    `--kind` flips SAE/transcoder (DRY; same width/k = fair). Both point to ADR-0004. (Left the OLD
+    pythia70m_smoke.yaml / gemma2_2b_reproduce.yaml untouched — those are the Phase-1 reproduce
+    configs.)
+  - Checks: both required CPU imports OK (`import microscope.cli`,
+    `from microscope.saes.train import coder_config_dict`); ruff + ruff format + mypy CLEAN on
+    train.py; ad-hoc CPU runs confirm the invariant (SAE F/F, transcoder T/T, shared width/k), every
+    validation path raises ValueError, both YAMLs load + hash + flow through coder_config_dict, and
+    train_coder raises GpuStackUnavailable (sparsify absent) — and ValueError before the gate on a
+    config missing width/k. Did NOT add/modify tests (tester's unit). Did not commit (per instruction).
+  - HANDOFF / tester must update 5 pre-existing tests that pinned the OLD stub contract (these are
+    EXPECTED contract changes, not source bugs — same transition reproduce/harvest already made):
+    (1) tests/test_pending.py::test_train_coder_stub_raises_pending — train_coder no longer raises
+    GpuImplementationPending; it now raises GpuStackUnavailable (and ValueError first on a config
+    without width/k). (2-5) tests/test_cli.py::test_train_with_valid_config_surfaces_gpu_gate and
+    tests/test_reproduction_gate.py::{test_train_passes_r1_then_hits_gpu_gate_exit_2_via_real_parser,
+    test_train_passes_r1_exit_2_via_function_monkeypatch, test_train_r1_and_gpu_exit_codes_are_distinct}
+    all invoke `train` with the OLD pythia70m_smoke.yaml (no `k`) expecting exit 2 (GPU gate); now
+    train_coder validates first and raises ValueError(missing k) -> different path. Fix: point those
+    train invocations at the NEW train_pythia70m_smoke.yaml (has width+k) so they pass validation and
+    reach the exit-2 GPU gate, OR assert the new validation behaviour. The R1 exit-3 tests
+    (gate-shut) are unaffected and still pass (R1 fires before train_coder).

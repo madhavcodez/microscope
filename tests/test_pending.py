@@ -1,14 +1,17 @@
 """Tests for microscope._pending (RULES.md E4 GPU-pending sentinel).
 
-GPU-bound stages raise GpuImplementationPending (a NotImplementedError subclass) whose message names
-the stage. The stub stage functions are only asserted to raise — never implemented or exercised.
+GPU-bound stages that are NOT yet wired to their library API raise GpuImplementationPending (a
+NotImplementedError subclass) whose message names the stage; those stubs are only asserted to raise,
+never implemented or exercised. Stages that ARE implemented but run only on the Modal [gpu] image
+(e.g. train_coder, ADR-0004) instead raise GpuStackUnavailable when the GPU stack is absent — see
+test_train_coder.py for that unit's full coverage; the relevant case is mirrored here.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from microscope._pending import GpuImplementationPending, pending
+from microscope._pending import GpuImplementationPending, GpuStackUnavailable, pending
 from microscope.config import RunConfig
 
 
@@ -43,15 +46,19 @@ def test_pending_message_marks_deliberate_stub_not_bug() -> None:
     assert "not a bug" in message.lower()
 
 
-def test_train_coder_stub_raises_pending() -> None:
-    # Arrange
+def test_train_coder_is_implemented_not_pending() -> None:
+    # Arrange: train_coder is no longer a GpuImplementationPending stub — it is the real Phase-2
+    # sparsify wrapper (ADR-0004) that validates the config, then gates on the GPU stack. On a valid
+    # config (layer + width + k present) the absent sparsify surfaces GpuStackUnavailable, NOT
+    # GpuImplementationPending — same stub->implemented transition reproduce/harvest already made.
     from microscope.saes.train import train_coder
 
-    cfg = RunConfig(name="x", model="EleutherAI/pythia-70m")
+    cfg = RunConfig(name="x", model="EleutherAI/pythia-70m", layer=3, width=4096, k=32)
 
-    # Act / Assert: GPU stub raises and names its stage; never actually implemented.
-    with pytest.raises(GpuImplementationPending, match="train_coder"):
+    # Act / Assert
+    with pytest.raises(GpuStackUnavailable) as exc_info:
         train_coder(cfg, "sae")
+    assert not isinstance(exc_info.value, GpuImplementationPending)
 
 
 def test_steer_with_sae_feature_stub_raises_pending() -> None:

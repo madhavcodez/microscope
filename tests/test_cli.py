@@ -42,9 +42,11 @@ def test_no_args_shows_help_without_crashing() -> None:
     assert result.exception is None or isinstance(result.exception, SystemExit)
 
 
-def test_train_with_valid_config_surfaces_gpu_gate(smoke_config_path: Path) -> None:
-    # Arrange / Act: a valid config gets past load/hash/seed, then the stub raises -> gated exit.
-    result = runner.invoke(app, ["train", "--config", str(smoke_config_path)])
+def test_train_with_valid_config_surfaces_gpu_gate(train_config_path: Path) -> None:
+    # Arrange / Act: a valid Phase-2 training config (width + k, ADR-0004) gets past load/hash/seed
+    # AND past the sparsify wrapper's validation, then the GPU/E4 gate raises -> gated exit. (The
+    # Phase-1 smoke config lacks k and now fails validation first, so this uses train_config_path.)
+    result = runner.invoke(app, ["train", "--config", str(train_config_path)])
 
     # Assert: gated stage exits non-zero (code 2) and surfaces the gate, not a raw traceback.
     assert result.exit_code != 0

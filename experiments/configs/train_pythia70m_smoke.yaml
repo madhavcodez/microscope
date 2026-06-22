@@ -1,0 +1,25 @@
+# Phase 2 SMOKE training config — Pythia-70M (ADR-0004; sparsify 1.3.0).
+# Purpose: prove the sparsify training wrapper runs end-to-end on a cheap model BEFORE any
+# Gemma-2-2B spend (RULES.md C4 "smallest model that proves the point"). Cheap; fits a small GPU.
+#
+# ONE YAML serves BOTH coders: the CLI `--kind {sae,transcoder}` flag flips
+# transcode/skip_connection (ADR-0004); width (=> num_latents) and k (=> TopK L0) are held FIXED
+# here so the SAE and the skip-transcoder are a fair head-to-head (no per-kind config drift).
+# Consumed by microscope.saes.train.coder_config_dict (extra='allow' => width/k/etc. are read here).
+name: train_pythia70m_smoke
+model: EleutherAI/pythia-70m-deduped
+layer: 3                      # small mid-stack layer; sparsify places the hookpoint from layers=[3]
+hookpoint: null              # leave null => sparsify derives the hookpoint from `layer` (ADR-0004)
+dataset: NeelNanda/pile-10k  # E4: confirm availability / text field on the Modal [gpu] image (unit 2)
+n_tokens: 500_000            # tiny budget — this is a convergence smoke, not a real run
+seed: 0
+
+# --- sparsify SaeConfig / TrainConfig settings (ADR-0004 §"E4 verification results") ---
+# width => SaeConfig.num_latents (absolute dictionary size). Small here for a fast smoke.
+width: 4096
+# k => SaeConfig.k, the exact L0 under TopK. SAE and transcoder MUST share this k (ADR-0004).
+k: 32
+activation: topk             # sparsify SaeConfig.activation: 'topk' (k = exact L0) | 'groupmax'
+batch_size: 16
+lr: 1.0e-4
+save_dir: outputs/coders     # Sae.save_to_disk target dir; run subfolder = run_name (kind-suffixed)
