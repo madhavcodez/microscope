@@ -14,6 +14,16 @@ class GpuImplementationPending(NotImplementedError):
     """A stage that must be implemented on the GPU host after verifying the library API (E4)."""
 
 
+class GpuStackUnavailable(RuntimeError):
+    """An IMPLEMENTED GPU stage was invoked where the interp stack is absent.
+
+    Distinct from :class:`GpuImplementationPending` (which means "not written yet"): this means the
+    code exists and is correct, but ``sae_lens`` / ``transformer_lens`` etc. are not installed —
+    they live only on the Modal ``[gpu]`` image (ADR-0003). Subclasses ``RuntimeError`` so callers
+    that catch ``RuntimeError`` still work; the CLI catches it to render the gate cleanly.
+    """
+
+
 def pending(stage: str, lib: str, phase: str) -> GpuImplementationPending:
     """Build a consistent, actionable 'not yet implemented' error for a GPU/library-bound stage."""
     return GpuImplementationPending(

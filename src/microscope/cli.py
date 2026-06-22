@@ -17,7 +17,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import __version__
-from ._pending import GpuImplementationPending
+from ._pending import GpuImplementationPending, GpuStackUnavailable
 from .config import RunConfig, config_hash, git_commit, hardware_info, load_config, set_seed
 
 app = typer.Typer(
@@ -45,7 +45,7 @@ def _run_stage(label: str, fn: Callable[[], Any]) -> None:
     try:
         result = fn()
         console.print(f"[green]{label} complete[/green]: {result}")
-    except GpuImplementationPending as exc:
+    except (GpuImplementationPending, GpuStackUnavailable) as exc:
         console.print(f"[yellow]GATED[/yellow] {label}: {exc}")
         raise typer.Exit(code=2) from None
 
