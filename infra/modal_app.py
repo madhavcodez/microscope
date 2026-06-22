@@ -1027,13 +1027,17 @@ def auto_interp_custom(run_name: str, layer: int = 12, max_latents: int = 100,
     # mismatch inside encode (x - b_dec). Wrap the loader delphi calls to force the coder onto CUDA.
     import sparsify
 
-    _orig_load = sparsify.SparseCoder.load_from_disk
+    def _force_cuda(orig):
+        def _w(*a, **k):
+            k["device"] = "cuda"  # FORCE (delphi may pass device='cpu' -> mismatch with cuda model)
+            r = orig(*a, **k)
+            return r.to("cuda") if hasattr(r, "to") else r
+        return _w
 
-    def _load_cuda(*a, **k):
-        k.setdefault("device", "cuda")
-        return _orig_load(*a, **k)
-
-    sparsify.SparseCoder.load_from_disk = _load_cuda
+    for _name in ("load_from_disk", "load_many"):
+        _o = getattr(sparsify.SparseCoder, _name, None)
+        if _o is not None:
+            setattr(sparsify.SparseCoder, _name, _force_cuda(_o))
 
     name = f"ai-{tag}"
     run_cfg = RunConfig(
