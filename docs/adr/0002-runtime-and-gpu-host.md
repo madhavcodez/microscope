@@ -1,5 +1,7 @@
 # ADR 0002: Python runtime pin and GPU host
-- Status: accepted (2026-06-21 — host decided: rented cloud 24 GB spot; hard budget cap $30)
+- Status: accepted (2026-06-21); host choice SUPERSEDED IN PART by ADR-0003 — execution moved to
+  **Modal serverless** (not a rented RunPod/Vast pod). The Python 3.11 pin and the $30 hard cap +
+  tightened per-run gate (~$5/90 min) below still stand.
 - Date: 2026-06-21
 
 ## Context
