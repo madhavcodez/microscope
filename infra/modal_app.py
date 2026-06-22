@@ -424,8 +424,13 @@ def auto_interp(
     hookpoint='layer_<L>/width_<W>/average_l0_<L0>'. Reports aggregate detection + fuzzing accuracy.
     Scores from a small local scorer are NOT directly comparable to papers using frontier scorers —
     label accordingly (R4). Capped at <=500 latents (RULES.md C3)."""
-    import asyncio
     import os
+
+    # Force the vLLM V0 engine BEFORE any vllm import: the V1 engine-core subprocess fails to
+    # initialize in this container ("Engine core initialization failed"); V0 inits in-process.
+    os.environ.setdefault("VLLM_USE_V1", "0")
+
+    import asyncio
     from pathlib import Path
 
     from delphi.__main__ import run
@@ -460,7 +465,7 @@ def auto_interp(
         max_latents=max_latents,
         filter_bos=True,
         num_gpus=1,
-        max_memory=0.85,
+        max_memory=0.5,  # leave GPU headroom: base model may still be resident when vLLM starts
         seed=22,
         hf_token=token,
         cache_cfg=CacheConfig(
