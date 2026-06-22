@@ -77,6 +77,16 @@ Phase 3 evaluates them. (The ~10M-token budget is modest under the $30 cap, so a
 will trail a production-scale SAE; the comparison's validity comes from the *identical* recipe/budget
 across the two coders, not from absolute scale.)
 
+## Phase 3 — pre-registration (committed before evaluation; full text in PROGRESS.md)
+
+Before evaluating the coders, the comparison was pre-registered (R3): **100 random latents** (seed 0,
+the same indices for both coders); metrics = auto-interp **detection + fuzzing** (local Qwen2.5-3B),
+each-coder **reconstruction FVU on its own objective**, and **SAEBench sparse_probing**; hypothesis
+(to confirm/refute, not assume) = the skip-transcoder Pareto-dominates the SAE on
+interpretability-vs-reconstruction; every SAE-vs-transcoder delta is reported with a **bootstrap 95% CI**
+(a difference is real only if the CI excludes zero). Auto-interp is expected to be scorer-limited
+(possibly inconclusive); reconstruction + SAEBench are the load-bearing axes. Results land below.
+
 ## What's next (Phases 3–4)
 
 Phase 3: pre-register a random feature sample + metrics, then run auto-interp + SAEBench head-to-head

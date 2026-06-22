@@ -9,6 +9,29 @@ train-g2-sae + train-g2-tc, saved/loadable on the artifacts Volume (identical re
 First Gemma runs OOM'd (fp32) => fixed bf16+batch8. Phase-3 glue de-risked (delphi native sparsify loader;
 SparseCoder reloads with sae_lens-like interface => SAEBench needs only a thin cfg adapter). NOW STARTING
 PHASE 3 (auto-interp + SAEBench head-to-head). Spend ≈ $4-5 of $30.
+
+## Phase 3 pre-registration (R3 — COMMITTED 2026-06-22 BEFORE any eval run; do not change post-hoc)
+- **Coders compared:** train-g2-sae vs train-g2-tc (Gemma-2-2B L12, width 16384, k=64, identical recipe).
+- **Feature sample:** 100 latents, drawn uniformly without replacement from range(16384) via
+  `numpy.random.default_rng(0).choice(16384, 100, replace=False)`. The SAME 100 indices are used for
+  BOTH coders (paired comparison). 100 ≤ 500 cap (C3); enough for a bootstrap CI.
+- **Auto-interp metrics (delphi, LOCAL Qwen2.5-3B-Instruct scorer, no API):** detection accuracy +
+  fuzzing accuracy, aggregate over the 100 latents. (Intruder = optional stretch only if it wires
+  cleanly + budget allows; not committed.) Reported with bootstrap 95% CIs.
+- **Reconstruction metric:** each coder's FVU / variance-explained on ITS OWN objective — SAE on
+  resid_post@L12, transcoder on MLP-out@L12 (from MLP-in). Labeled as each-on-own-target (they are not
+  the same target; this is the Transcoders-Beat-SAEs framing, not a like-for-like resid comparison).
+- **SAEBench:** sparse_probing (validated in repro-003). absorption ONLY if it runs cleanly on the
+  custom coder. NOTE: a SAEBench eval may be SAE-only; if it cannot evaluate the transcoder, that metric
+  is N/A for the transcoder (documented, not faked) and the head-to-head for it leans on auto-interp+recon.
+- **Hypothesis (reference, to CONFIRM or REFUTE — NOT assumed):** the skip-transcoder Pareto-dominates
+  the SAE on the interpretability-vs-reconstruction frontier (Transcoders-Beat-SAEs).
+- **Significance:** every reported SAE-vs-transcoder delta gets a bootstrap 95% CI over the 100-latent
+  sample; a difference is only called real if the CI excludes zero (recall repro-004's 0.544 vs 0.529
+  was within noise).
+- **Honest expectation (stated up front):** auto-interp absolute scores will likely be near-chance
+  (scorer-limited, repro-004), so the interpretability axis may be INCONCLUSIVE. The salvageable signals
+  are the reconstruction axis and any relative ordering that survives the CI test.
 Phase 1 COMPLETE earlier (R1 gate: repro-001/002 recon, repro-003 SAEBench, repro-004 auto-interp;
 REPORT.md + PHASE1_RETROSPECTIVE.md).
 
