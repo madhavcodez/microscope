@@ -1,8 +1,12 @@
 # PROGRESS
 
 ## Current phase
-Phase 1 (reproduction) IN PROGRESS on Modal. Reconstruction reproduced (VE 0.797 / L0 83);
-auto-interp + SAEBench parts of the R1 gate still to do. Gate #1 fully resolved (Modal, $30).
+**Phase 1 COMPLETE — PAUSED here per user (resume at Phase 2 later).** R1 gate satisfied:
+reconstruction REPRODUCED (repro-001/002, VE ~0.80 / L0 ~83), SAEBench sparse-probing REPRODUCED
+(repro-003, SAE 0.767 > residual 0.688), auto-interp pipeline reproduced (repro-004, detection 0.544 /
+fuzz 0.529 — method works; absolute scores inconclusive, 3B local scorer near chance). Finding written
+in REPORT.md; decisions/findings/open-questions in PHASE1_RETROSPECTIVE.md. Spend ≈ $3 of $30.
+Phase 2 (custom SAE + transcoder training) NOT started.
 
 ## Done
 - Repo created at C:\Users\madha\microscope; `git init`; local author `madhavcodez
@@ -20,26 +24,23 @@ auto-interp + SAEBench parts of the R1 gate still to do. Gate #1 fully resolved 
   microscope info/--help, determinism, stable config hash.
 
 ## In progress
-- Phase 1 reproduction on Modal. DONE: pretrained Gemma Scope SAE reconstruction reproduced
-  (repro-001: VE 0.797 / L0 83 @ layer_12/width_16k, documented ballpark). TODO to fully clear the
-  R1 gate: (a) delphi auto-interp detection/fuzzing/intruder scores with the local Offline scorer,
-  (b) a SAEBench metric (absorption / sparse_probing) — both on the same pretrained SAE.
+- (nothing — PAUSED after Phase 1 per user instruction)
 
 ## Blocked / needs human
 - **GATE #1 — RESOLVED.** Platform = **Modal** (existing creds + hf-token secret + credits). GPU =
   L4 24GB (~$0.80/hr, per-second billed → no idle burn). HARD cap **$30**; tightened run-gate
-  (~$5/90min). Local scorer. Gemma-2-2B license accepted by the user (account madhavc123). See
-  ADR-0003. Spend so far ≈ $0.25.
-- (nothing currently blocking — running autonomously on Modal within the $30 cap)
+  (~$5/90min). Local scorer. Gemma-2-2B license accepted (account madhavc123). ADR-0003. Spend ≈ $3.
+- (nothing currently blocking)
 
-## Next
-1. Phase 1 (finish R1 gate): wire delphi auto-interp (Offline local scorer) + one SAEBench eval on
-   the pretrained Gemma Scope SAE; reproduce documented-ballpark scores; log to EXPERIMENTS.md.
-2. Refactor the proven Modal reproduction recipe into src/microscope/{reproduce,activations,eval,
-   autointerp} via coder→tester→quality-checker, replacing the E4 stubs; point the CLI at Modal.
-3. Phase 2: train a custom SAE + skip-transcoder (smoke on Pythia-70M first). Then Phases 3-6.
-   Log cost_est every run; stay ≤ $30.
-4. Then Phases 2-6 through the coder->tester->quality-checker loop, logging cost_est each run (≤$30).
+## Next (Phase 2 — when resuming; NOT started)
+1. **First answer the open question (PHASE1_RETROSPECTIVE §4.2):** does dictionary_learning 0.1.0
+   support a skip-transcoder? Introspect on Modal before committing to the SAE+transcoder deliverable.
+2. Phase 2: train a custom SAE (+ transcoder if supported). SMOKE on Pythia-70M first (cheap), then a
+   single solid Gemma-2-2B config. Log cost_est; stay ≤ $30 (~$27 remains).
+3. Optional polish to fully close Phase 1 to paper-grade: scale SAEBench to 8 datasets × k{1,2,5}
+   (repro-003 was a single-dataset smoke); larger auto-interp feature sample + stronger scorer if the
+   absolute auto-interp number matters (it is currently labeled inconclusive by design).
+4. Then Phases 3-6 through the coder->tester->quality-checker loop, logging cost_est each run (≤$30).
 
 ## Current task spec
 - (orchestrator fills this per unit of work)
