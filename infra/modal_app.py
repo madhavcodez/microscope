@@ -1161,3 +1161,49 @@ def probe_coder_fvu(layer: int = 12, n_docs: int = 16) -> dict:
     out["tc_fvu(resid)"] = round(st.mean(tc_resid), 4)
     print("CODER FVU PROBE:", out)
     return out
+
+
+@app.function(
+    image=full_image, secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=600, retries=0,
+)
+def probe_saebench_adapter() -> dict:
+    """E4 (Phase 4 dep): requirements to wrap a sparsify SAE as a sae_lens SAE SAEBench accepts."""
+    import dataclasses
+    import inspect
+
+    import sparsify
+
+    out: dict = {}
+    sae = sparsify.SparseCoder.load_from_disk(
+        "/root/outputs/coders/train_gemma2_2b_l12-sae/layers.12", device="cpu"
+    )
+    sd = sae.state_dict()
+    out["sparsify_state_keys"] = ", ".join(f"{k}{tuple(v.shape)}" for k, v in sd.items())[:400]
+    try:
+        out["sparsify_cfg"] = ", ".join(f"{k}={v}" for k, v in vars(sae.cfg).items())[:300]
+    except Exception as exc:  # noqa: BLE001
+        out["sparsify_cfg"] = f"n/a: {exc}"
+
+    try:
+        import sae_lens
+
+        out["sae_lens.version"] = getattr(sae_lens, "__version__", "?")
+        out["sae_lens.public"] = ", ".join(n for n in dir(sae_lens) if not n.startswith("_"))[:300]
+        for cfgname in ("SAEConfig", "SAEConfigLoadOptions"):
+            obj = getattr(sae_lens, cfgname, None)
+            if obj is not None and dataclasses.is_dataclass(obj):
+                out[f"{cfgname}_fields"] = ", ".join(f.name for f in dataclasses.fields(obj))[:400]
+    except Exception as exc:  # noqa: BLE001
+        out["sae_lens"] = f"FAIL: {exc}"
+
+    try:
+        from sae_bench.sae_bench_utils import general_utils
+
+        out["load_and_format_sae_src"] = inspect.getsource(general_utils.load_and_format_sae)[:1200]
+    except Exception as exc:  # noqa: BLE001
+        out["load_and_format_sae_src"] = f"FAIL: {exc}"
+
+    for k, v in out.items():
+        print(f"=== {k} ===\n{v}\n")
+    return out
