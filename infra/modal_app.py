@@ -1096,6 +1096,10 @@ def auto_interp_custom(run_name: str, layer: int = 12, max_latents: int = 100,
             "per_latent": [round(v, 4) for v in per_latent],
         }
     out["latent_sample"] = sorted(out["scores"]["detection"].get("per_latent", []) and latent_ids)[:5]
+    import json as _json
+    with open(f"/root/outputs/autointerp_{tag}.json", "w") as _fh:
+        _json.dump(out, _fh)
+    artifacts_vol.commit()
     print("AUTO-INTERP CUSTOM RESULT:", {k: (v if k != "scores" else {s: {kk: vv for kk, vv in d.items() if kk != 'per_latent'} for s, d in v.items()}) for k, v in out.items()})
     return out
 
