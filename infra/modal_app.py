@@ -1026,12 +1026,13 @@ def auto_interp_custom(run_name: str, layer: int = 12, max_latents: int = 100,
     # delphi loads the sparsify coder on CPU by default while the model runs on CUDA -> device
     # mismatch inside encode (x - b_dec). Wrap the loader delphi calls to force the coder onto CUDA.
     import sparsify
+    import torch as _torch
 
     def _force_cuda(orig):
         def _w(*a, **k):
-            k["device"] = "cuda"  # FORCE (delphi may pass device='cpu' -> mismatch with cuda model)
+            k["device"] = "cuda"  # FORCE onto cuda + bf16 to match the bf16 model activations delphi feeds
             r = orig(*a, **k)
-            return r.to("cuda") if hasattr(r, "to") else r
+            return r.to("cuda", _torch.bfloat16) if hasattr(r, "to") else r
         return _w
 
     for _name in ("load_from_disk", "load_many"):
