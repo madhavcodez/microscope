@@ -1,5 +1,5 @@
 # ADR 0002: Python runtime pin and GPU host
-- Status: proposed (needs human decision on GPU host — Gate #1)
+- Status: accepted (2026-06-21 — host decided: rented cloud 24 GB spot; hard budget cap $30)
 - Date: 2026-06-21
 
 ## Context
@@ -19,10 +19,18 @@ human (Human-Decision Gate #1).
 - **Pin the runtime to Python 3.11 on the GPU host** (3.10 acceptable). Keep `requires-python = ">=3.10"`
   in pyproject so the package metadata matches the spec, but the actual environment that runs training/
   eval/auto-interp is 3.11 to match the libraries' validated range.
-- **GPU host: DEFERRED to the human (Gate #1).** Conservative recommendation pending that decision:
-  a single ~24 GB card (RTX 3090/4090 or A10) on a spot/community instance for the bulk of the work,
-  with the option of a short A100/H100 burst only if a specific run needs it (which would itself be a
-  Gate if > $15 / > 2 h).
+- **GPU host: DECIDED — rented cloud, a single ~24 GB spot instance** (RTX 3090/4090 on
+  RunPod/Vast, ~$0.25/hr). No A100/H100 (unjustified at this budget; would be a Gate).
+- **Budget: HARD CAP $30 total** (overrides the spec's ≤$80 target downward; the user set $30).
+  Because $30 is small, the cost gate from RULES.md C2 is tightened for this project: pause for human
+  approval before any single run expected to exceed **~$5 or ~90 minutes**, hard-stop with a ~$5
+  buffer (i.e. stop work near ~$25 spent), and log an estimated `cost_est` per run in EXPERIMENTS.md.
+- **Budget discipline (how $30 is made to fit):** (1) develop + debug every library wrapper on
+  Pythia-70M first — only spend Gemma-2-2B GPU time on code that already works; (2) local scorer only
+  (no paid API); (3) modest token budgets, subset evals, ≤200 auto-interp features; (4) stop/terminate
+  the pod whenever idle (idle burn, not compute, is the main risk); (5) avoid large activation caches
+  (C3). If a run threatens the cap, STOP and tell the human: trim scope (SAE-only, fewer SAEBench
+  evals) or top up.
 
 ## Alternatives considered
 - **Use local Python 3.13 + local 6 GB GPU for everything** — rejected. Cannot fit Gemma-2-2B; library

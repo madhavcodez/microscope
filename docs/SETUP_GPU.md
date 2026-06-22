@@ -12,12 +12,18 @@ This is the turnkey path to unblock **Gate #1** (docs/PROGRESS.md). The local de
 | **Lambda** | A10 24 GB / A100 40–80 GB | ~$0.75 (A10) / ~$1.10+ (A100) | Cleaner UX; A100 only if a run truly needs it. |
 | **Modal** | A10G / A100 | usage-based | Best if you want serverless/scripted spin-up; per-second billing. |
 
-Budget frame (RULES.md C1–C2): **target ≤ $80 total**; any single run expected to exceed **$15 or 2 h**
-stops for your approval. A 24 GB RTX 3090 at ~$0.30/hr gives ~250 hrs of headroom inside $80 — plenty for
-Phase 1 reproduction + a couple of custom trains + controls + one circuit.
+Budget frame (DECIDED — ADR-0002): **HARD cap $30 total.** A 24 GB RTX 3090 spot at ~$0.25/hr ≈ 100+
+GPU-hours — enough for Phase 1 reproduction + one SAE + one transcoder + auto-interp/SAEBench on a
+subset + both controls + one circuit, IF disciplined. Tightened gate for this small budget: pause for
+approval before any single run expected to exceed **~$5 or ~90 min**; hard-stop near ~$25 (keep a $5
+buffer); log `cost_est` per run in EXPERIMENTS.md. The real budget risk is idle time, not compute —
+**stop/terminate the pod whenever idle.**
 
-**Conservative recommendation:** a single 24 GB RTX 3090/4090 spot instance on RunPod for everything;
-reserve an A100 burst only if a specific run is VRAM-bound (that burst would itself be a Gate).
+**Make $30 fit:** develop + debug every wrapper on **Pythia-70M first** (tiny/fast/cheap) and spend
+Gemma-2-2B GPU time only on code that already works; local scorer only (no paid API); modest token
+budgets, subset evals, ≤200 auto-interp features; no large activation caches.
+
+**Host:** a single 24 GB RTX 3090/4090 spot instance on RunPod (or Vast). No A100/H100 at this budget.
 
 ## 2. Bring up the environment (Python 3.11 — ADR-0002)
 

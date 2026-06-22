@@ -22,22 +22,23 @@ Phase 0 — scaffolding COMPLETE + foundation unit merged. Phase 1 BLOCKED on Ga
 - (nothing active — awaiting Gate #1 decision before Phase 1)
 
 ## Blocked / needs human
-- **GATE #1 — GPU host + spend (BLOCKS Phase 1 onward).** Local GPU is a GTX 1660 SUPER (6 GB),
-  which is NOT enough for Gemma-2-2B SAE training / SAEBench (spec requires ~24 GB / RTX 3090).
-  Need the human to provision a GPU host (RunPod / Vast / Lambda / Modal) and confirm a spend cap
-  (target ≤ $80 total; any single run > $15 or > 2 h needs explicit approval per C2). Until then,
-  only CPU-verifiable scaffolding/code can be built (config system, CLI, module contracts, tests).
-- **Note — Python runtime.** Local interpreter is 3.13.14. The interp stack (dictionary_learning,
-  delphi, sae-bench, nnsight) is validated on 3.10/3.11. The GPU host should pin 3.10 or 3.11.
-  Captured for the human in ADR-0002 (proposed).
+- **GATE #1 — RESOLVED (2026-06-21).** Decision: rented cloud, single ~24 GB spot instance
+  (RunPod/Vast RTX 3090/4090). HARD budget cap **$30** (tightened gate: pause before any run > ~$5
+  or ~90 min; hard-stop ~$25 with a $5 buffer). Scorer = LOCAL (no paid API). Python 3.11 on host.
+  Full details in ADR-0002 (accepted).
+- **Remaining handoff (mechanical, not a gate):** the human must launch the pod and either (a) paste
+  the SSH connection so the orchestrator drives it via Bash, or (b) run scripts/ on the pod / open
+  Claude Code there. The orchestrator cannot provision or pay for cloud itself.
 
-## Next
-- Finish Phase 0 commit + push.
-- Build CPU-verifiable foundation through the agent loop: config.py (pydantic configs + seed/
-  determinism + run-metadata logging) -> tester -> quality-checker -> merge.
-- Lay down module contracts (typed stubs + docstrings) for reproduce/activations/saes/autointerp/
-  eval/circuits/steering, each marked "E4: verify library API on GPU host before implementing".
-- Phase 1 reproduction begins once GATE #1 is resolved.
+## Next (once the pod is up + reachable)
+1. On the pod (Ubuntu, Python 3.11): clone repo, `pip install -e ".[gpu,dev]"`, install the 4 source
+   libs, `huggingface-cli login` + accept the Gemma-2-2B license, `microscope info` + `pytest` green.
+   Runbook: docs/SETUP_GPU.md.
+2. Dev/debug all wrappers on Pythia-70M first (cheap), then spend Gemma time only on working code.
+3. Phase 1 reproduction (HARD GATE, R1): wire reproduce/activations/autointerp/eval against the
+   VERIFIED libs (E4), reproduce a known Gemma Scope auto-interp + SAEBench result in the documented
+   ballpark, log it to EXPERIMENTS.md labelled 'reproduced'. Do NOT start Phase 2 until this passes.
+4. Then Phases 2-6 through the coder->tester->quality-checker loop, logging cost_est each run (≤$30).
 
 ## Current task spec
 - (orchestrator fills this per unit of work)
