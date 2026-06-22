@@ -546,13 +546,43 @@ def auto_interp(
     )
     asyncio.run(run(run_cfg))
 
-    scores_path = Path.cwd() / "results" / name / "scores"
-    latent_df, counts = load_data(scores_path, run_cfg.hookpoints)
-    agg = get_agg_metrics(latent_df, counts)
-    out: dict = {"hookpoint": hookpoint, "scorer": scorer_model, "max_latents": max_latents}
-    for score_type, df in agg.groupby("score_type"):
-        out[f"{score_type}_accuracy"] = round(float(df["accuracy"].mean()), 4)
-    out["n_latents_scored"] = int(len(latent_df["latent"].unique())) if len(latent_df) else 0
+    # delphi stores scores under the RESOLVED module name (e.g. 'layers.12'), not the gemma-scope
+    # params path, so load_data(hookpoints=[params_path]) finds nothing. Read the raw per-latent
+    # score files directly and aggregate defensively (schema is also printed for transparency).
+    import glob
+
+    out: dict = {"hookpoint": hookpoint, "scorer": scorer_model, "max_latents": max_latents, "scores": {}}
+    for scorer in ("detection", "fuzz"):
+        sdir = Path.cwd() / "results" / name / "scores" / scorer
+        files = glob.glob(str(sdir / "*.txt")) + glob.glob(str(sdir / "*.json"))
+        per_latent_acc: list[float] = []
+        sample = None
+        for fp in files:
+            try:
+                data = json.load(open(fp))
+            except Exception:  # noqa: BLE001
+                continue
+            recs = data if isinstance(data, list) else data.get("score", [])
+            if sample is None and recs:
+                sample = str(recs[0])[:300]
+            correct = []
+            for r in recs:
+                if not isinstance(r, dict):
+                    continue
+                if "correct" in r:
+                    correct.append(bool(r["correct"]))
+                elif "prediction" in r and "ground_truth" in r:
+                    correct.append(r["prediction"] == r["ground_truth"])
+                elif "prediction" in r and "activating" in r:
+                    correct.append(bool(r["prediction"]) == bool(r["activating"]))
+            if correct:
+                per_latent_acc.append(sum(correct) / len(correct))
+        out["scores"][scorer] = {
+            "n_files": len(files),
+            "n_latents_with_acc": len(per_latent_acc),
+            "mean_accuracy": round(sum(per_latent_acc) / len(per_latent_acc), 4) if per_latent_acc else None,
+            "sample_record": sample,
+        }
     print("AUTO-INTERP RESULT:", out)
     return out
 
