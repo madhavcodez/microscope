@@ -203,7 +203,7 @@ def pkg_smoke() -> dict[str, str]:
     timeout=5400,
     retries=0,
 )
-def train_coder_modal(config_dict: dict, kind: str = "sae") -> dict:
+def train_coder_modal(config_dict: dict, kind: str = "sae", randomize: bool = False) -> dict:
     """Phase 2: train an SAE or skip-transcoder on Modal via the verified microscope.saes.train wrapper.
 
     Persists the trained dictionary to the artifacts Volume so Phase-3 eval can reload it. Returns the
@@ -216,7 +216,11 @@ def train_coder_modal(config_dict: dict, kind: str = "sae") -> dict:
 
     # Redirect the dictionary save into the mounted persistent Volume (overrides the YAML save_dir).
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-    cfg = RunConfig(**{**config_dict, "save_dir": "/root/outputs/coders"})
+    overrides = {"save_dir": "/root/outputs/coders"}
+    if randomize:  # randomized-model control (ADR-0005): random transformer, real embeddings
+        overrides["randomize_model"] = True
+        overrides["run_name"] = f"{config_dict.get('name', 'run')}-{kind}-random"
+    cfg = RunConfig(**{**config_dict, **overrides})
     result = train_coder(cfg, kind)  # type: ignore[arg-type]
 
     save_path = result.get("save_path", "")
@@ -229,13 +233,13 @@ def train_coder_modal(config_dict: dict, kind: str = "sae") -> dict:
 
 
 @app.local_entrypoint()
-def train_main(config: str, kind: str = "sae") -> None:
+def train_main(config: str, kind: str = "sae", randomize: bool = False) -> None:
     """Run a training job: modal run infra/modal_app.py::train_main --config <yaml> --kind sae|transcoder."""
     import yaml
 
     with open(config) as fh:
         config_dict = yaml.safe_load(fh)
-    result = train_coder_modal.remote(config_dict, kind)
+    result = train_coder_modal.remote(config_dict, kind, randomize)
     print("FINAL TRAIN RESULT:", result)
 
 

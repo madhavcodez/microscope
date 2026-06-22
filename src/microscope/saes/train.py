@@ -238,6 +238,19 @@ def train_coder(config: RunConfig, kind: CoderKind) -> dict[str, Any]:
     # --- Load the model + tokenizer (lazy, GPU-only) ---
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = AutoModel.from_pretrained(settings["model"], torch_dtype=torch.bfloat16).to(device)
+    if getattr(config, "randomize_model", False):
+        # Randomized-model control (ADR-0005): re-init ALL transformer weights from the model's own
+        # init distribution but KEEP the real token embeddings, so token statistics are preserved
+        # and the control isolates model-LEARNED structure (the Heap et al. "random transformer").
+        # Seeded for reproducibility (E1).
+        from transformers import AutoConfig
+
+        torch.manual_seed(int(settings["seed"]))
+        real_embed = model.get_input_embeddings().weight.data.clone()
+        hf_cfg = AutoConfig.from_pretrained(settings["model"])
+        model = AutoModel.from_config(hf_cfg).to(device=device, dtype=torch.bfloat16)
+        with torch.no_grad():
+            model.get_input_embeddings().weight.data.copy_(real_embed)
     tokenizer = AutoTokenizer.from_pretrained(settings["model"])
 
     # sparsify computes activations on-the-fly, but Trainer needs a TOKENIZED arrow Dataset
