@@ -1306,6 +1306,7 @@ def probing_eval(run_name: str, randomize: bool = False, layer: int = 12,
         "n_examples": len(texts), "sae_probe_acc": round(acc, 4),
         "acc_ci95": [round(float(lo), 4), round(float(hi), 4)],
         "d_sae": d_sae, "text_col": text_col, "label_col": label_col,
+        "yte": [int(v) for v in yte], "pred": [int(v) for v in pred],
     }
     import json as _json
 
