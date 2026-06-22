@@ -1,7 +1,8 @@
 # PROGRESS
 
 ## Current phase
-Phase 0 — scaffolding COMPLETE + foundation unit merged. Phase 1 BLOCKED on Gate #1 (GPU host).
+Phase 1 (reproduction) IN PROGRESS on Modal. Reconstruction reproduced (VE 0.797 / L0 83);
+auto-interp + SAEBench parts of the R1 gate still to do. Gate #1 fully resolved (Modal, $30).
 
 ## Done
 - Repo created at C:\Users\madha\microscope; `git init`; local author `madhavcodez
@@ -19,25 +20,25 @@ Phase 0 — scaffolding COMPLETE + foundation unit merged. Phase 1 BLOCKED on Ga
   microscope info/--help, determinism, stable config hash.
 
 ## In progress
-- (nothing active — awaiting Gate #1 decision before Phase 1)
+- Phase 1 reproduction on Modal. DONE: pretrained Gemma Scope SAE reconstruction reproduced
+  (repro-001: VE 0.797 / L0 83 @ layer_12/width_16k, documented ballpark). TODO to fully clear the
+  R1 gate: (a) delphi auto-interp detection/fuzzing/intruder scores with the local Offline scorer,
+  (b) a SAEBench metric (absorption / sparse_probing) — both on the same pretrained SAE.
 
 ## Blocked / needs human
-- **GATE #1 — RESOLVED (2026-06-21).** Decision: rented cloud, single ~24 GB spot instance
-  (RunPod/Vast RTX 3090/4090). HARD budget cap **$30** (tightened gate: pause before any run > ~$5
-  or ~90 min; hard-stop ~$25 with a $5 buffer). Scorer = LOCAL (no paid API). Python 3.11 on host.
-  Full details in ADR-0002 (accepted).
-- **Remaining handoff (mechanical, not a gate):** the human must launch the pod and either (a) paste
-  the SSH connection so the orchestrator drives it via Bash, or (b) run scripts/ on the pod / open
-  Claude Code there. The orchestrator cannot provision or pay for cloud itself.
+- **GATE #1 — RESOLVED.** Platform = **Modal** (existing creds + hf-token secret + credits). GPU =
+  L4 24GB (~$0.80/hr, per-second billed → no idle burn). HARD cap **$30**; tightened run-gate
+  (~$5/90min). Local scorer. Gemma-2-2B license accepted by the user (account madhavc123). See
+  ADR-0003. Spend so far ≈ $0.25.
+- (nothing currently blocking — running autonomously on Modal within the $30 cap)
 
-## Next (once the pod is up + reachable)
-1. On the pod (Ubuntu, Python 3.11): clone repo, `pip install -e ".[gpu,dev]"`, install the 4 source
-   libs, `huggingface-cli login` + accept the Gemma-2-2B license, `microscope info` + `pytest` green.
-   Runbook: docs/SETUP_GPU.md.
-2. Dev/debug all wrappers on Pythia-70M first (cheap), then spend Gemma time only on working code.
-3. Phase 1 reproduction (HARD GATE, R1): wire reproduce/activations/autointerp/eval against the
-   VERIFIED libs (E4), reproduce a known Gemma Scope auto-interp + SAEBench result in the documented
-   ballpark, log it to EXPERIMENTS.md labelled 'reproduced'. Do NOT start Phase 2 until this passes.
+## Next
+1. Phase 1 (finish R1 gate): wire delphi auto-interp (Offline local scorer) + one SAEBench eval on
+   the pretrained Gemma Scope SAE; reproduce documented-ballpark scores; log to EXPERIMENTS.md.
+2. Refactor the proven Modal reproduction recipe into src/microscope/{reproduce,activations,eval,
+   autointerp} via coder→tester→quality-checker, replacing the E4 stubs; point the CLI at Modal.
+3. Phase 2: train a custom SAE + skip-transcoder (smoke on Pythia-70M first). Then Phases 3-6.
+   Log cost_est every run; stay ≤ $30.
 4. Then Phases 2-6 through the coder->tester->quality-checker loop, logging cost_est each run (≤$30).
 
 ## Current task spec
