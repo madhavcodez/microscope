@@ -467,7 +467,7 @@ def auto_interp(
     layer: int = 12,
     width: str = "16k",
     max_latents: int = 20,
-    scorer_model: str = "Qwen/Qwen2.5-1.5B-Instruct",
+    scorer_model: str = "Qwen/Qwen2.5-3B-Instruct",
     n_tokens: int = 200_000,
 ) -> dict:
     """Phase-1 auto-interp: run delphi (LOCAL Offline scorer, no paid API) on the Gemma Scope SAE.
@@ -517,8 +517,9 @@ def auto_interp(
         max_latents=max_latents,
         filter_bos=True,
         num_gpus=1,
-        max_memory=0.5,  # leave GPU headroom: base model may still be resident when vLLM starts
+        max_memory=0.6,  # base model is freed after caching; 0.6 of 22GB fits the 3B scorer + KV
         seed=22,
+        verbose=False,  # skip delphi's plotly/kaleido visualization (kaleido absent -> crash)
         hf_token=token,
         cache_cfg=CacheConfig(
             dataset_repo="NeelNanda/pile-10k",
