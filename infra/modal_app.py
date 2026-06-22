@@ -551,37 +551,55 @@ def auto_interp(
     # score files directly and aggregate defensively (schema is also printed for transparency).
     import glob
 
+    def _collect_correct(obj: object, bucket: list[bool]) -> None:
+        """Recursively find per-example correctness signals anywhere in a score structure."""
+        if isinstance(obj, dict):
+            if isinstance(obj.get("correct"), bool):
+                bucket.append(obj["correct"])
+            elif "prediction" in obj and ("ground_truth" in obj or "activating" in obj):
+                gt = obj.get("ground_truth", obj.get("activating"))
+                try:
+                    bucket.append(bool(obj["prediction"]) == bool(gt))
+                except (TypeError, ValueError):
+                    pass
+            for v in obj.values():
+                _collect_correct(v, bucket)
+        elif isinstance(obj, list):
+            for v in obj:
+                _collect_correct(v, bucket)
+
     out: dict = {"hookpoint": hookpoint, "scorer": scorer_model, "max_latents": max_latents, "scores": {}}
     for scorer in ("detection", "fuzz"):
         sdir = Path.cwd() / "results" / name / "scores" / scorer
-        files = glob.glob(str(sdir / "*.txt")) + glob.glob(str(sdir / "*.json"))
+        files = glob.glob(str(sdir / "*"))
         per_latent_acc: list[float] = []
-        sample = None
+        raw_sample = None
         for fp in files:
             try:
-                data = json.load(open(fp))
-            except Exception:  # noqa: BLE001
+                text = open(fp).read()
+            except OSError:
                 continue
-            recs = data if isinstance(data, list) else data.get("score", [])
-            if sample is None and recs:
-                sample = str(recs[0])[:300]
-            correct = []
-            for r in recs:
-                if not isinstance(r, dict):
-                    continue
-                if "correct" in r:
-                    correct.append(bool(r["correct"]))
-                elif "prediction" in r and "ground_truth" in r:
-                    correct.append(r["prediction"] == r["ground_truth"])
-                elif "prediction" in r and "activating" in r:
-                    correct.append(bool(r["prediction"]) == bool(r["activating"]))
-            if correct:
-                per_latent_acc.append(sum(correct) / len(correct))
+            if raw_sample is None and text.strip():
+                raw_sample = repr(text[:400])
+            data: object = None
+            try:
+                data = json.loads(text)
+            except Exception:  # noqa: BLE001 - maybe NDJSON
+                try:
+                    data = [json.loads(ln) for ln in text.splitlines() if ln.strip()]
+                except Exception:  # noqa: BLE001
+                    data = None
+            if data is None:
+                continue
+            bucket: list[bool] = []
+            _collect_correct(data, bucket)
+            if bucket:
+                per_latent_acc.append(sum(bucket) / len(bucket))
         out["scores"][scorer] = {
             "n_files": len(files),
             "n_latents_with_acc": len(per_latent_acc),
             "mean_accuracy": round(sum(per_latent_acc) / len(per_latent_acc), 4) if per_latent_acc else None,
-            "sample_record": sample,
+            "raw_sample": raw_sample,
         }
     print("AUTO-INTERP RESULT:", out)
     return out
