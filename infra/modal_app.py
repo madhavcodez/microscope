@@ -990,3 +990,95 @@ def recon_eval(run_name: str, kind: str, layer: int = 12, n_docs: int = 96, seq_
     }
     print("RECON RESULT:", out)
     return out
+
+
+@app.function(
+    image=pkg_image, gpu="L4", secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=5400, retries=0,
+)
+def auto_interp_custom(run_name: str, layer: int = 12, max_latents: int = 100,
+                       scorer_model: str = "Qwen/Qwen2.5-3B-Instruct") -> dict:
+    """Phase 3: delphi auto-interp on a CUSTOM sparsify-trained dict (sparsify branch, local checkpoint).
+
+    delphi routes to its gemma-scope loader if 'gemma' appears in sparse_model, so the checkpoint is
+    copied to a gemma-free path first. Same local Qwen2.5-3B scorer + seed + sample as repro-004 so the
+    SAE and transcoder runs are paired (max_latents + seed fixed => same latent selection per coder)."""
+    import asyncio
+    import glob
+    import os
+    import re
+    import shutil
+
+    os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
+    from pathlib import Path
+
+    from delphi.__main__ import run
+    from delphi.config import CacheConfig, ConstructorConfig, RunConfig, SamplerConfig
+
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    # Copy to a gemma-FREE path so delphi uses the sparsify loader, not the gemma-scope loader.
+    safe_src = f"/root/outputs/coders/{run_name}"
+    tag = "sae" if run_name.endswith("-sae") else "tc"
+    safe_dst = f"/root/coder_{tag}"
+    if not os.path.isdir(safe_dst):
+        shutil.copytree(safe_src, safe_dst)
+
+    name = f"ai-{tag}"
+    run_cfg = RunConfig(
+        name=name,
+        model="google/gemma-2-2b",
+        sparse_model=safe_dst,
+        hookpoints=[f"layers.{layer}"],
+        explainer_provider="offline",
+        explainer_model=scorer_model,
+        explainer_model_max_len=4096,
+        explainer="default",
+        scorers=["detection", "fuzz"],
+        max_latents=max_latents,
+        filter_bos=True,
+        num_gpus=1,
+        max_memory=0.5,
+        seed=0,
+        verbose=False,
+        hf_token=token,
+        cache_cfg=CacheConfig(
+            dataset_repo="NeelNanda/pile-10k", dataset_split="train", dataset_column="text",
+            batch_size=8, cache_ctx_len=256, n_tokens=200_000, n_splits=5,
+        ),
+        constructor_cfg=ConstructorConfig(
+            example_ctx_len=32, min_examples=50, n_non_activating=50, non_activating_source="random",
+        ),
+        sampler_cfg=SamplerConfig(
+            n_examples_train=20, n_examples_test=40, n_quantiles=10,
+            train_type="quantiles", test_type="quantiles",
+        ),
+    )
+    asyncio.run(run(run_cfg))
+
+    act_re = re.compile(r'"activating":\s*(true|false)')
+    pred_re = re.compile(r'"prediction":\s*(true|false)')
+    out: dict = {"run_name": run_name, "tag": tag, "scorer": scorer_model, "scores": {}}
+    for scorer in ("detection", "fuzz"):
+        sdir = Path.cwd() / "results" / name / "scores" / scorer
+        files = glob.glob(str(sdir / "*"))
+        per_latent = []
+        latent_ids = []
+        for fp in files:
+            try:
+                text = open(fp).read()
+            except OSError:
+                continue
+            a = act_re.findall(text)
+            p = pred_re.findall(text)
+            n = min(len(a), len(p))
+            if n:
+                per_latent.append(sum(1 for x, y in zip(a[:n], p[:n]) if x == y) / n)
+                latent_ids.append(os.path.basename(fp))
+        out["scores"][scorer] = {
+            "n_latents": len(per_latent),
+            "mean_accuracy": round(sum(per_latent) / len(per_latent), 4) if per_latent else None,
+            "per_latent": [round(v, 4) for v in per_latent],
+        }
+    out["latent_sample"] = sorted(out["scores"]["detection"].get("per_latent", []) and latent_ids)[:5]
+    print("AUTO-INTERP CUSTOM RESULT:", {k: (v if k != "scores" else {s: {kk: vv for kk, vv in d.items() if kk != 'per_latent'} for s, d in v.items()}) for k, v in out.items()})
+    return out
