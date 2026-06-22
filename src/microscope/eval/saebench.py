@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..config import RunConfig
 from .._pending import pending
+from ..config import RunConfig
 
 
 def run_saebench(config: RunConfig, sae: Any) -> dict[str, Any]:

@@ -19,15 +19,14 @@ import os
 import platform
 import random
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-# ----------------------------------------------------------------------------------------------------
 # Project paths
-# ----------------------------------------------------------------------------------------------------
 
 
 def project_root(start: Path | None = None) -> Path:
@@ -42,12 +41,13 @@ def project_root(start: Path | None = None) -> Path:
     return Path.cwd()
 
 
+# Resolved eagerly at import for the default log target. Helpers that take a `path` arg (e.g.
+# append_experiment_row) call project_root() lazily so tests can monkeypatch it; this constant
+# is just the convenience default, not the source of truth.
 EXPERIMENTS_PATH = project_root() / "docs" / "EXPERIMENTS.md"
 
 
-# ----------------------------------------------------------------------------------------------------
 # Determinism (E1)
-# ----------------------------------------------------------------------------------------------------
 
 
 def set_seed(seed: int, *, deterministic: bool = True) -> None:
@@ -87,9 +87,7 @@ def set_seed(seed: int, *, deterministic: bool = True) -> None:
         pass
 
 
-# ----------------------------------------------------------------------------------------------------
 # Config models (E2/E5) + loading
-# ----------------------------------------------------------------------------------------------------
 
 
 class RunConfig(BaseModel):
@@ -142,9 +140,7 @@ def config_hash(config: Mapping[str, Any] | BaseModel, *, length: int = 12) -> s
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:length]
 
 
-# ----------------------------------------------------------------------------------------------------
 # Run metadata (E3)
-# ----------------------------------------------------------------------------------------------------
 
 
 def git_commit(short: bool = True) -> str:
@@ -154,9 +150,7 @@ def git_commit(short: bool = True) -> str:
     """
     args = ["git", "rev-parse", "--short", "HEAD"] if short else ["git", "rev-parse", "HEAD"]
     try:
-        out = subprocess.run(
-            args, cwd=project_root(), capture_output=True, text=True, timeout=10
-        )
+        out = subprocess.run(args, cwd=project_root(), capture_output=True, text=True, timeout=10)
         return out.stdout.strip() if out.returncode == 0 else "unknown"
     except (OSError, subprocess.SubprocessError):
         return "unknown"

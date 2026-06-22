@@ -8,15 +8,17 @@ Gate #1) those contracts raise a clear, documented 'pending' message rather than
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from . import __version__
-from .config import RunConfig, config_hash, git_commit, hardware_info, load_config, set_seed
 from ._pending import GpuImplementationPending
+from .config import RunConfig, config_hash, git_commit, hardware_info, load_config, set_seed
 
 app = typer.Typer(
     add_completion=False,
@@ -27,7 +29,7 @@ console = Console()
 
 
 def _prepare(config_path: Path) -> RunConfig:
-    """Load a config, log its identity (hash + commit + hardware), and set the seed. Shared prelude."""
+    """Load a config, log its identity (hash/commit/hardware), set the seed. Shared prelude."""
     config = load_config(config_path)
     chash = config_hash(config)
     console.print(
@@ -38,7 +40,7 @@ def _prepare(config_path: Path) -> RunConfig:
     return config
 
 
-def _run_stage(label: str, fn) -> None:
+def _run_stage(label: str, fn: Callable[[], Any]) -> None:
     """Execute a stage callable, rendering the GPU/E4 gate cleanly instead of a raw traceback."""
     try:
         result = fn()
@@ -60,7 +62,9 @@ def info() -> None:
 
 
 @app.command()
-def reproduce(config: Path = typer.Option(..., help="Path to a Phase-1 reproduction YAML config.")) -> None:
+def reproduce(
+    config: Path = typer.Option(..., help="Path to a Phase-1 reproduction YAML config."),
+) -> None:
     """Phase 1 (HARD GATE): reproduce a known Gemma Scope auto-interp + SAEBench result."""
     from .reproduce.gemma_scope import reproduce as _reproduce
 
@@ -108,7 +112,9 @@ def eval_(config: Path = typer.Option(..., help="Path to an eval YAML config."))
 @app.command()
 def control(
     config: Path = typer.Option(..., help="Path to a controls YAML config."),
-    kind: str = typer.Option("randomized", help="'randomized' (model control) or 'steering' baseline."),
+    kind: str = typer.Option(
+        "randomized", help="'randomized' (model control) or 'steering' baseline."
+    ),
     n_features: int = typer.Option(100, help="Features for the randomized-model control (<=500)."),
     scorer_model: str = typer.Option("", help="LOCAL scorer model id (randomized control)."),
 ) -> None:

@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from ..config import RunConfig
 from .._pending import pending
+from ..config import RunConfig
 
 CoderKind = Literal["sae", "transcoder"]
 

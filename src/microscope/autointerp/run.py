@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..config import RunConfig
 from .._pending import pending
+from ..config import RunConfig
 
 MAX_FEATURES_PER_RUN = 500  # RULES.md C3 — hard cap unless the human raises it (Gate).
 

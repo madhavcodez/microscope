@@ -1,4 +1,4 @@
-"""Load pretrained Gemma Scope SAEs for Gemma-2-2B and reproduce a known auto-interp + SAEBench result.
+"""Load pretrained Gemma Scope SAEs for Gemma-2-2B and reproduce an auto-interp + SAEBench result.
 
 CONTRACT — Phase 1, the HARD GATE (RULES.md R1). Implemented on the GPU host after verifying the
 sae_lens / HF Gemma Scope loading path (E4). Produced numbers must land in the documented ballpark
@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..config import RunConfig
 from .._pending import pending
+from ..config import RunConfig
 
 
 def load_pretrained_sae(config: RunConfig) -> Any:

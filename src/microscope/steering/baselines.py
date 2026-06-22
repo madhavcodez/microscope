@@ -15,8 +15,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from ..config import RunConfig
 from .._pending import pending
+from ..config import RunConfig
 
 
 def difference_of_means(
@@ -42,7 +42,9 @@ def difference_of_means(
     pos = np.asarray(positive, dtype=np.float64)
     neg = np.asarray(negative, dtype=np.float64)
     if pos.ndim != 2 or neg.ndim != 2:
-        raise ValueError(f"Expected 2-D arrays; got positive.ndim={pos.ndim}, negative.ndim={neg.ndim}.")
+        raise ValueError(
+            f"Expected 2-D arrays; got positive.ndim={pos.ndim}, negative.ndim={neg.ndim}."
+        )
     if pos.shape[0] == 0 or neg.shape[0] == 0:
         raise ValueError("Both positive and negative activation sets must be non-empty.")
     if pos.shape[1] != neg.shape[1]:
@@ -53,13 +55,18 @@ def difference_of_means(
     direction = pos.mean(axis=0) - neg.mean(axis=0)
     if normalize:
         norm = float(np.linalg.norm(direction))
+        # Exact == 0.0 is intentional (not a < epsilon check): both inputs are class means, so the
+        # only way the difference is truly zero is exact cancellation — a genuinely undefined
+        # direction, not floating-point noise we should silently normalize.
         if norm == 0.0:
             raise ValueError("Difference-of-means is the zero vector; cannot normalize.")
         direction = direction / norm
     return direction
 
 
-def steer_with_sae_feature(config: RunConfig, sae: Any, feature_idx: int, coefficient: float) -> Any:
+def steer_with_sae_feature(
+    config: RunConfig, sae: Any, feature_idx: int, coefficient: float
+) -> Any:
     """Apply an SAE-feature steering intervention to the live model and measure its effect.
 
     CONTRACT — GPU host (E4). Compared head-to-head against :func:`difference_of_means` (R2).
