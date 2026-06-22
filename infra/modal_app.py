@@ -132,6 +132,54 @@ def reproduce_recon(layer: int = 12, width: str = "16k", n_docs: int = 128, seq_
 
 
 @app.function(image=full_image, secrets=[HF_SECRET], timeout=1200)
+def probe_saebench() -> dict[str, str]:
+    """E4: introspect the INSTALLED SAEBench sparse_probing module (pip pkg may differ from GitHub)."""
+    import dataclasses
+    import importlib
+    import inspect
+
+    out: dict[str, str] = {}
+    for modname in (
+        "sae_bench.evals.sparse_probing_sae_probes",
+        "sae_bench.evals.sparse_probing",
+        "sae_bench.evals.sparse_probing.main",
+        "sae_bench.evals.sparse_probing.eval_config",
+    ):
+        try:
+            m = importlib.import_module(modname)
+            names = [n for n in dir(m) if not n.startswith("_")]
+            out[modname] = ", ".join(names)[:400]
+            for n in names:
+                obj = getattr(m, n)
+                if callable(obj) and any(k in n.lower() for k in ("run", "eval", "main", "probe")):
+                    try:
+                        out[f"{modname}.{n}()"] = f"{n}{inspect.signature(obj)}"[:320]
+                    except (ValueError, TypeError):
+                        pass
+                if dataclasses.is_dataclass(obj):
+                    out[f"{modname}.{n}<fields>"] = ", ".join(
+                        f.name for f in dataclasses.fields(obj)
+                    )[:320]
+        except Exception as exc:  # noqa: BLE001
+            out[modname] = f"FAIL: {type(exc).__name__}: {str(exc)[:100]}"
+
+    # the SAE loader SAEBench uses
+    try:
+        from sae_bench.sae_bench_utils import general_utils
+
+        out["general_utils"] = ", ".join(n for n in dir(general_utils) if not n.startswith("_"))[:300]
+        for fn in ("load_and_format_sae", "get_results_filepath"):
+            if hasattr(general_utils, fn):
+                out[f"general_utils.{fn}()"] = f"{fn}{inspect.signature(getattr(general_utils, fn))}"
+    except Exception as exc:  # noqa: BLE001
+        out["general_utils"] = f"FAIL: {type(exc).__name__}: {str(exc)[:100]}"
+
+    for k, v in out.items():
+        print(f"{k}\n    {v}")
+    return out
+
+
+@app.function(image=full_image, secrets=[HF_SECRET], timeout=1200)
 def probe2() -> dict[str, str]:
     """Confirm Gemma access post-license + locate Gemma Scope SAE IDs + deep-probe delphi/sae_bench."""
     import importlib
@@ -505,4 +553,59 @@ def auto_interp(
         out[f"{score_type}_accuracy"] = round(float(df["accuracy"].mean()), 4)
     out["n_latents_scored"] = int(len(latent_df["latent"].unique())) if len(latent_df) else 0
     print("AUTO-INTERP RESULT:", out)
+    return out
+
+
+@app.function(
+    image=full_image, gpu="L4", secrets=[HF_SECRET], volumes=CACHE, timeout=3600, retries=0
+)
+def saebench_sparse_probing(
+    layer: int = 12, width: str = "16k", train_size: int = 1500, test_size: int = 500
+) -> dict:
+    """Phase-1 SAEBench eval: sparse-probing accuracy of the canonical Gemma Scope SAE.
+
+    Objective metric (no LLM scorer). Verified API: sae_bench.evals.sparse_probing.main.run_eval with
+    selected_saes as native sae_lens (release, sae_id) tuples. Headline = SAE probe top-1 accuracy vs
+    the residual-stream baseline (~0.65 documented); the SAE should clearly beat the baseline."""
+    import glob
+    import json
+    import os
+
+    from sae_bench.evals.sparse_probing import main as sp
+
+    sae_id = f"layer_{layer}/width_{width}/canonical"
+    selected_saes = [("gemma-scope-2b-pt-res-canonical", sae_id)]
+    config = sp.SparseProbingEvalConfig(
+        model_name="gemma-2-2b",
+        random_seed=42,
+        llm_batch_size=32,
+        llm_dtype="bfloat16",
+        dataset_names=["LabHC/bias_in_bios_class_set1"],  # single dataset = fast smoke
+        probe_train_set_size=train_size,
+        probe_test_set_size=test_size,
+        context_length=128,
+        k_values=[1],
+    )
+    out_path = "eval_results/sparse_probing"
+    sp.run_eval(
+        config, selected_saes, "cuda", out_path,
+        force_rerun=True, clean_up_activations=True, save_activations=False,
+    )
+
+    files = glob.glob(os.path.join(out_path, "*_eval_results.json"))
+    if not files:
+        raise RuntimeError(f"no SAEBench result json written to {out_path}")
+    res = json.load(open(files[0]))
+    metrics = res.get("eval_result_metrics", {})
+    sae_m = metrics.get("sae", {})
+    llm_m = metrics.get("llm", {})
+    out = {
+        "sae_id": sae_id,
+        "dataset": "LabHC/bias_in_bios_class_set1",
+        "sae_top_1_test_accuracy": sae_m.get("sae_top_1_test_accuracy"),
+        "sae_test_accuracy": sae_m.get("sae_test_accuracy"),
+        "llm_top_1_test_accuracy": llm_m.get("llm_top_1_test_accuracy"),
+        "llm_test_accuracy": llm_m.get("llm_test_accuracy"),
+    }
+    print("SAEBENCH SPARSE-PROBING RESULT:", out)
     return out
