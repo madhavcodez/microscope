@@ -62,7 +62,8 @@ whether the interpretability is real.
 | Custom SAE + skip-transcoder trained on Gemma-2-2B (artifacts; no interp claim yet) | **novel (artifact)** | train-g2-sae, train-g2-tc |
 | Custom SAE reconstruction VE (own objective) | **novel** | recon-g2-sae (0.514) |
 | SAE-vs-skip-transcoder interpretability head-to-head | **inconclusive** | ai-g2-sae, ai-g2-tc (both Δ CIs include 0) |
-| Controls (randomized-model, steering) + circuit | **not done** | Phases 4–6 |
+| Randomized-model control — real SAE has structure beyond token stats | **conclusive** | ctrl-probe-real/random (paired gap +0.072, CI [+0.033,+0.117]) |
+| Steering control (B) + circuit (Phase 5) + full write-up (Phase 6) | **not done** | remaining |
 
 Phase 1 claimed nothing novel (reproduction only, R1). Phase 2 produces novel *artifacts* but still
 makes no interpretability claim — those wait for Phase 3's evaluation.
@@ -109,12 +110,35 @@ one. **We can neither confirm nor refute the "transcoders Pareto-dominate SAEs" 
 budget/scorer regime** — a valid, pre-registered outcome (R4). The scorer-*independent* signal is pursued
 in Phase 4 (randomized-model probing gap).
 
-## What's next (Phases 3–4)
+## Phase 4 — controls (the differentiator)
 
-Phase 3: pre-register a random feature sample + metrics, then run auto-interp + SAEBench head-to-head
-(SAE vs skip-transcoder) with bootstrap CIs and honest labels. Phase 4 (the differentiator): the
-randomized-model control (probing-gap + auto-interp-gap) and steering vs difference-of-means. Phase 5
-(circuit) + Phase 6 (write-up) are deferred. Open questions/risks: PHASE1_RETROSPECTIVE.md.
+### Control A — randomized-model control (multi-axis, ADR-0005)
+
+**Primary axis (scorer-independent) — CONCLUSIVE.** A logistic probe on the SAE's features separates two
+bias-in-bios professions at **0.933** (real-model SAE) vs **0.861** (an SAE trained on a randomized-weight
+Gemma, with the real token embeddings kept). The **paired** gap is **+0.072, 95% bootstrap CI
+[+0.033, +0.117]** — it excludes zero, so the real-model SAE encodes **model-learned structure beyond
+token statistics**: on this axis the interpretability is *real*, not a token-co-occurrence artifact.
+**Honest nuance (the control's real value):** the random-model SAE is already at 0.861, so the *majority*
+of the sparse-probing signal is **token-level** (profession words carried by the preserved embeddings);
+the model's *learned* structure contributes a statistically-significant but **modest +7 points**. The
+control both confirms real structure *and* quantifies how much "interpretability" is really token stats.
+
+**Secondary axis (auto-interp gap) — not measurable.** delphi could not score the random-model SAE
+(`AssertionError: no non-activating examples` — its features are too degenerate to build contrastive
+examples), so the real-vs-random auto-interp gap is not reported. Consistent with the scorer-limited
+auto-interp throughout — which is exactly why the primary axis was designed to be scorer-independent.
+
+### Control B — steering vs difference-of-means
+Pre-registered in ADR-0005 (SAE feature vs `difference_of_means`, nurse/professor concept, success rate
+under a perplexity-fluency bound). See "What's next".
+
+## What's next
+
+**Control B (steering)** is the remaining Phase-4 unit. **Phase 5** (one feature circuit) and **Phase 6**
+(full write-up) are deferred to a later prompt. Open questions/risks: PHASE1_RETROSPECTIVE.md. A
+follow-up could also build the sparsify→sae_lens adapter to put the custom coders through the full
+SAEBench suite (Phase-3 SAEBench was SAE-only / deferred).
 
 ## Reproducibility & cost
 
