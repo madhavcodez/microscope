@@ -1,0 +1,41 @@
+# ADR 0002: Python runtime pin and GPU host
+- Status: proposed (needs human decision on GPU host — Gate #1)
+- Date: 2026-06-21
+
+## Context
+Discovered at scaffolding time on the build machine (the Claude Code orchestrator host):
+- **Local Python is 3.13.14.** The interpretability stack (dictionary_learning, delphi, sae-bench,
+  nnsight, sae_lens) is developed and validated on Python 3.10/3.11. 3.13 is new enough that wheels and
+  pinned deps for parts of this stack may be missing or untested.
+- **Local GPU is a GTX 1660 SUPER, 6 GB.** The spec and SAEBench docs call for ~24 GB (RTX 3090) to run
+  Gemma-2-2B SAE training + SAEBench. 6 GB cannot hold Gemma-2-2B work; it can host Pythia-70M smoke
+  tests only.
+
+Per C4 and R1, the real results (Phase 1 reproduction onward) must run on Gemma-2-2B, which means a GPU
+host with ≥ 24 GB VRAM. Choosing and paying for that host is a research/cost decision reserved for the
+human (Human-Decision Gate #1).
+
+## Decision
+- **Pin the runtime to Python 3.11 on the GPU host** (3.10 acceptable). Keep `requires-python = ">=3.10"`
+  in pyproject so the package metadata matches the spec, but the actual environment that runs training/
+  eval/auto-interp is 3.11 to match the libraries' validated range.
+- **GPU host: DEFERRED to the human (Gate #1).** Conservative recommendation pending that decision:
+  a single ~24 GB card (RTX 3090/4090 or A10) on a spot/community instance for the bulk of the work,
+  with the option of a short A100/H100 burst only if a specific run needs it (which would itself be a
+  Gate if > $15 / > 2 h).
+
+## Alternatives considered
+- **Use local Python 3.13 + local 6 GB GPU for everything** — rejected. Cannot fit Gemma-2-2B; library
+  compatibility on 3.13 is unverified. Usable only for Pythia-70M smoke tests and CPU-side unit tests.
+- **Pin Python 3.10** — acceptable alternative; 3.11 chosen as the newer of the two validated versions
+  for better performance with equally broad wheel availability.
+- **Commit to a specific cloud (RunPod/Vast/Lambda/Modal) now** — rejected as a silent decision (D1);
+  it has cost + validity implications, so it is escalated as Gate #1 rather than chosen here.
+
+## Consequences
+- (+) Local machine is still useful: it builds and unit-tests all CPU-verifiable code and can run
+  Pythia-70M smoke tests, so development proceeds while the GPU host is decided.
+- (+) Pinning 3.11 on the host avoids burning GPU time on dependency-resolution failures.
+- (−) Phase 1+ is blocked until the human resolves Gate #1 (host + spend cap).
+- This ADR is `proposed` until the human picks a host; flip to `accepted` and record the host + the
+  agreed spend cap at that point.

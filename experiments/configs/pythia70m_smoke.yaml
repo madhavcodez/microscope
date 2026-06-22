@@ -1,0 +1,14 @@
+# Pythia-70M smoke test (Phase 2 pre-flight). Cheap; fits the local 6 GB GPU.
+# Purpose: confirm the training loop converges before spending on Gemma-2-2B (RULES.md C4).
+name: pythia70m_smoke
+model: EleutherAI/pythia-70m-deduped
+layer: 3
+hookpoint: blocks.3.hook_resid_post   # E4: confirm exact hookpoint name against the live model
+dataset: NeelNanda/pile-10k           # E4: confirm availability / field names on the host
+n_tokens: 1_000_000
+seed: 0
+
+# Stage-specific (consumed by the dictionary_learning wrapper once implemented; extra=allow):
+width: 16384
+sparsity_l0_target: 40
+trainer: topk                          # E4: confirm trainer names in dictionary_learning

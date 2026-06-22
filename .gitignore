@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Experiment artifacts (logged to docs/EXPERIMENTS.md; raw outputs are not committed)
+experiments/results/*
+!experiments/results/.gitkeep
+
+# Activation caches can be ~100 GB — never commit (RULES.md C3)
+*.activations
+activations_cache/
+*.safetensors
+*.pt
+*.bin
+
+# Model / HF caches
+.cache/
+hf_cache/
+
+# Local env / secrets
+.env
+*.local

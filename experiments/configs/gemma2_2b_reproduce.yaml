@@ -1,0 +1,14 @@
+# Phase 1 reproduction (HARD GATE, RULES.md R1). Requires the GPU host (~24 GB) — Gate #1.
+# Loads a pretrained Gemma Scope SAE for Gemma-2-2B and reproduces a known auto-interp + SAEBench result.
+name: gemma2_2b_reproduce
+model: google/gemma-2-2b
+layer: 12
+hookpoint: blocks.12.hook_resid_post   # E4: confirm the Gemma Scope release's exact hookpoint
+dataset: monology/pile-uncopyrighted   # E4: confirm on the host
+n_tokens: 1_000_000
+seed: 0
+
+# Reproduction targets (filled with published ballpark once located; the tester checks against these):
+gemma_scope_release: gemma-scope-2b-pt-res   # E4: confirm exact release id / width / l0 variant
+expected_l0: null
+expected_saebench_ballpark: null
