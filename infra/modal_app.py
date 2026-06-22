@@ -893,3 +893,100 @@ def probe_phase3_glue() -> dict:
     for k, v in out.items():
         print(f"{k}\n    {v}")
     return out
+
+
+@app.function(
+    image=pkg_image, gpu="L4", secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=1800, retries=0,
+)
+def recon_eval(run_name: str, kind: str, layer: int = 12, n_docs: int = 96, seq_len: int = 128) -> dict:
+    """Phase 3: each-coder reconstruction variance-explained on its OWN objective, on HF activations
+    (matching how sparsify trained the coders), with a bootstrap 95% CI over documents.
+
+    SAE target = resid_post@L (output of model.layers[L]); transcoder target = MLP-out@L (from MLP-in).
+    Uses coder.forward(input) for the reconstruction so the transcoder's skip connection is included."""
+    import os
+
+    import numpy as np
+    import sparsify
+    import torch
+    from datasets import load_dataset
+    from transformers import AutoModel, AutoTokenizer
+
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    dev = "cuda"
+    coder = sparsify.SparseCoder.load_from_disk(
+        f"/root/outputs/coders/{run_name}/layers.{layer}", device=dev
+    )
+    model = (
+        AutoModel.from_pretrained("google/gemma-2-2b", torch_dtype=torch.bfloat16, token=token)
+        .to(dev).eval()
+    )
+    tok = AutoTokenizer.from_pretrained("google/gemma-2-2b", token=token)
+    ds = load_dataset("NeelNanda/pile-10k", split=f"train[:{n_docs}]")
+    texts = [t for t in ds["text"] if t and t.strip()]
+
+    layer_mod = model.layers[layer]
+    mlp_mod = layer_mod.mlp
+    cap: dict = {}
+
+    def _t(x):  # extract a tensor from a tensor / tuple / structured output
+        if torch.is_tensor(x):
+            return x
+        if isinstance(x, (tuple, list)) and torch.is_tensor(x[0]):
+            return x[0]
+        for a in ("sae_out", "output", "recon", "reconstruction", "out", "y"):
+            v = getattr(x, a, None)
+            if torch.is_tensor(v):
+                return v
+        return None
+
+    per_doc = []
+    printed = False
+    with torch.no_grad():
+        for text in texts:
+            cap.clear()
+            ids = tok(text, return_tensors="pt", truncation=True, max_length=seq_len).input_ids.to(dev)
+            if kind == "sae":
+                h = layer_mod.register_forward_hook(lambda m, i, o: cap.__setitem__("y", _t(o)))
+                model(ids)
+                h.remove()
+                src = tgt = cap["y"][0, 1:].float()
+            else:
+                h1 = mlp_mod.register_forward_pre_hook(lambda m, i: cap.__setitem__("in", i[0]))
+                h2 = mlp_mod.register_forward_hook(lambda m, i, o: cap.__setitem__("out", _t(o)))
+                model(ids)
+                h1.remove()
+                h2.remove()
+                src = cap["in"][0, 1:].float()
+                tgt = cap["out"][0, 1:].float()
+            if tgt.shape[0] == 0:
+                continue
+            fwd = coder(src.to(torch.bfloat16))
+            recon = _t(fwd)
+            if recon is None:
+                raise RuntimeError(f"could not extract recon from coder output: {type(fwd)} {dir(fwd)}")
+            recon = recon.float()
+            if not printed:
+                print(f"coder fwd type={type(fwd).__name__} recon_shape={tuple(recon.shape)} tgt={tuple(tgt.shape)}")
+                printed = True
+            sse = ((tgt - recon) ** 2).sum().item()
+            var = ((tgt - tgt.mean(0)) ** 2).sum().item()
+            per_doc.append((sse, var, tgt.shape[0]))
+
+    sse = np.array([d[0] for d in per_doc])
+    var = np.array([d[1] for d in per_doc])
+    ve = 1.0 - sse.sum() / var.sum()
+    rng = np.random.default_rng(0)
+    n = len(per_doc)
+    boot = [1.0 - sse[i].sum() / var[i].sum() for i in (rng.integers(0, n, n) for _ in range(1000))]
+    lo, hi = np.percentile(boot, [2.5, 97.5])
+    out = {
+        "run_name": run_name, "kind": kind,
+        "target": "resid_post" if kind == "sae" else "mlp_out",
+        "variance_explained": round(float(ve), 4),
+        "ve_ci95": [round(float(lo), 4), round(float(hi), 4)],
+        "k_L0": int(getattr(coder.cfg, "k", 0)), "n_docs": n,
+    }
+    print("RECON RESULT:", out)
+    return out
