@@ -1082,3 +1082,61 @@ def auto_interp_custom(run_name: str, layer: int = 12, max_latents: int = 100,
     out["latent_sample"] = sorted(out["scores"]["detection"].get("per_latent", []) and latent_ids)[:5]
     print("AUTO-INTERP CUSTOM RESULT:", {k: (v if k != "scores" else {s: {kk: vv for kk, vv in d.items() if kk != 'per_latent'} for s, d in v.items()}) for k, v in out.items()})
     return out
+
+
+@app.function(
+    image=pkg_image, gpu="L4", secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=900, retries=0,
+)
+def probe_coder_fvu(layer: int = 12, n_docs: int = 16) -> dict:
+    """E4: does sparsify ForwardOutput carry .fvu? Find the transcoder's correct input (mlp_in vs resid)."""
+    import os
+    import statistics as st
+
+    import sparsify
+    import torch
+    from datasets import load_dataset
+    from transformers import AutoModel, AutoTokenizer
+
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    dev = "cuda"
+    model = AutoModel.from_pretrained("google/gemma-2-2b", torch_dtype=torch.bfloat16, token=token).to(dev).eval()
+    tok = AutoTokenizer.from_pretrained("google/gemma-2-2b", token=token)
+    ds = load_dataset("NeelNanda/pile-10k", split=f"train[:{n_docs}]")
+    texts = [t for t in ds["text"] if t and t.strip()]
+    base = "/root/outputs/coders"
+    sae = sparsify.SparseCoder.load_from_disk(f"{base}/train_gemma2_2b_l12-sae/layers.{layer}", device=dev)
+    tc = sparsify.SparseCoder.load_from_disk(f"{base}/train_gemma2_2b_l12-transcoder/layers.{layer}", device=dev)
+    lm = model.layers[layer]
+    cap: dict = {}
+    tt = lambda o: o[0] if isinstance(o, tuple) else o
+    out: dict = {}
+    sae_f, tc_mlpin, tc_resid = [], [], []
+
+    def fvu(coder, x):
+        o = coder(x.to(torch.bfloat16))
+        v = getattr(o, "fvu", None)
+        return float(v) if v is not None else float("nan")
+
+    with torch.no_grad():
+        for text in texts:
+            cap.clear()
+            ids = tok(text, return_tensors="pt", truncation=True, max_length=128).input_ids.to(dev)
+            h0 = lm.register_forward_hook(lambda m, i, o: cap.__setitem__("resid", tt(o)))
+            h1 = lm.mlp.register_forward_pre_hook(lambda m, i: cap.__setitem__("mlp_in", i[0]))
+            model(ids)
+            h0.remove()
+            h1.remove()
+            resid = cap["resid"][0, 1:]
+            mlp_in = cap["mlp_in"][0, 1:]
+            if not out:
+                o = sae(resid.to(torch.bfloat16))
+                out["ForwardOutput_fields"] = ", ".join(a for a in dir(o) if not a.startswith("_"))[:300]
+            sae_f.append(fvu(sae, resid))
+            tc_mlpin.append(fvu(tc, mlp_in))
+            tc_resid.append(fvu(tc, resid))
+    out["sae_fvu(resid)"] = round(st.mean(sae_f), 4)
+    out["tc_fvu(mlp_in)"] = round(st.mean(tc_mlpin), 4)
+    out["tc_fvu(resid)"] = round(st.mean(tc_resid), 4)
+    print("CODER FVU PROBE:", out)
+    return out
