@@ -809,7 +809,7 @@ def saebench_sparse_probing(
         random_seed=42,
         llm_batch_size=32,
         llm_dtype="bfloat16",
-        dataset_names=["LabHC/bias_in_bios_class_set1"],  # single dataset = fast smoke
+        dataset_names=["LabHC/bias_in_bios"],  # single dataset = fast smoke
         probe_train_set_size=train_size,
         probe_test_set_size=test_size,
         context_length=128,
@@ -830,7 +830,7 @@ def saebench_sparse_probing(
     llm_m = metrics.get("llm", {})
     out = {
         "sae_id": sae_id,
-        "dataset": "LabHC/bias_in_bios_class_set1",
+        "dataset": "LabHC/bias_in_bios",
         "sae_top_1_test_accuracy": sae_m.get("sae_top_1_test_accuracy"),
         "sae_test_accuracy": sae_m.get("sae_test_accuracy"),
         "llm_top_1_test_accuracy": llm_m.get("llm_top_1_test_accuracy"),
@@ -1255,7 +1255,7 @@ def probing_eval(run_name: str, randomize: bool = False, layer: int = 12,
     tok = AutoTokenizer.from_pretrained("google/gemma-2-2b", token=token)
     lm = model.layers[layer]
 
-    ds = load_dataset("LabHC/bias_in_bios_class_set1", split="train")
+    ds = load_dataset("LabHC/bias_in_bios", split="train")
     cols = ds.column_names
     text_col = "text" if "text" in cols else ("hard_text" if "hard_text" in cols else cols[0])
     label_col = "label" if "label" in cols else ("profession" if "profession" in cols else cols[-1])
