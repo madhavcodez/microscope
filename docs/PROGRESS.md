@@ -1,12 +1,14 @@
 # PROGRESS
 
 ## Current phase
-**Phase 1 COMPLETE — PAUSED here per user (resume at Phase 2 later).** R1 gate satisfied:
-reconstruction REPRODUCED (repro-001/002, VE ~0.80 / L0 ~83), SAEBench sparse-probing REPRODUCED
-(repro-003, SAE 0.767 > residual 0.688), auto-interp pipeline reproduced (repro-004, detection 0.544 /
-fuzz 0.529 — method works; absolute scores inconclusive, 3B local scorer near chance). Finding written
-in REPORT.md; decisions/findings/open-questions in PHASE1_RETROSPECTIVE.md. Spend ≈ $3 of $30.
-Phase 2 (custom SAE + transcoder training) NOT started.
+**PHASE 2 IN PROGRESS (resume prompt: Phases 2-4).** Course corrections 0a/0b/0c DONE: ADR-0002 fixed;
+R1 mechanical gate merged (train exits 3 without a reproduced row, QC APPROVE); ADR-0004 (sparsify) +
+sparsify 1.3.0 API verified on Modal. Phase-2 units 1-2 DONE: sparsify wrapper (SAE=transcode/skip F/F,
+transcoder T/T, shared width/k) + Pythia-70M SAE & transcoder smokes both pass (dicts saved to artifacts
+Volume). Units 3-4 (Gemma-2-2B SAE + skip-transcoder, layer 12, width 16k, k=64) RUNNING — first attempts
+OOM'd (gemma loaded fp32); fixed to bf16 + batch 8 + expandable_segments. Spend ≈ $4-5 of $30.
+Phase 1 COMPLETE earlier (R1 gate: repro-001/002 recon, repro-003 SAEBench, repro-004 auto-interp;
+REPORT.md + PHASE1_RETROSPECTIVE.md).
 
 ## Done
 - Repo created at C:\Users\madha\microscope; `git init`; local author `madhavcodez
