@@ -60,7 +60,9 @@ whether the interpretability is real.
 | Auto-interp *pipeline* works on the pretrained SAE (local scorer) | **reproduced (method)** | repro-004 |
 | Auto-interp *absolute* detection/fuzz scores match the literature | **inconclusive** | scorer-size dependent (repro-004) |
 | Custom SAE + skip-transcoder trained on Gemma-2-2B (artifacts; no interp claim yet) | **novel (artifact)** | train-g2-sae, train-g2-tc |
-| SAE-vs-transcoder comparison, controls, circuit | **not done** | Phases 3–6 |
+| Custom SAE reconstruction VE (own objective) | **novel** | recon-g2-sae (0.514) |
+| SAE-vs-skip-transcoder interpretability head-to-head | **inconclusive** | ai-g2-sae, ai-g2-tc (both Δ CIs include 0) |
+| Controls (randomized-model, steering) + circuit | **not done** | Phases 4–6 |
 
 Phase 1 claimed nothing novel (reproduction only, R1). Phase 2 produces novel *artifacts* but still
 makes no interpretability claim — those wait for Phase 3's evaluation.
@@ -85,7 +87,27 @@ each-coder **reconstruction FVU on its own objective**, and **SAEBench sparse_pr
 (to confirm/refute, not assume) = the skip-transcoder Pareto-dominates the SAE on
 interpretability-vs-reconstruction; every SAE-vs-transcoder delta is reported with a **bootstrap 95% CI**
 (a difference is real only if the CI excludes zero). Auto-interp is expected to be scorer-limited
-(possibly inconclusive); reconstruction + SAEBench are the load-bearing axes. Results land below.
+(possibly inconclusive); reconstruction + SAEBench are the load-bearing axes.
+
+### Phase 3 results — SAE vs skip-transcoder (custom Gemma-2-2B coders, identical recipe)
+
+| Axis | SAE | Skip-transcoder | Δ (TC−SAE), 95% bootstrap CI | Label |
+|---|---|---|---|---|
+| Reconstruction VE (own objective) | 0.514 (CI [0.507, 0.519]) | not cleanly isolable | — | SAE novel; TC limitation |
+| Auto-interp **detection** | 0.540 (n=58) | 0.539 (n=61) | −0.001, [−0.022, +0.022] | **inconclusive** |
+| Auto-interp **fuzzing** | 0.523 | 0.546 | +0.023, [−0.001, +0.047] | **inconclusive** |
+| SAEBench sparse_probing | resid-probing → SAE-only | N/A (transcoder) | — | SAE-side only (Phase 4 adapter) |
+
+**Verdict: INCONCLUSIVE.** Neither auto-interp delta's CI excludes zero, so we cannot say the
+skip-transcoder beats *or* loses to the SAE on interpretability at this scorer scale. Both coders sit
+near the 0.5 chance line — the bottleneck is the 3B local scorer (repro-004 showed the identical pattern
+for the *pretrained* Gemma Scope SAE: 0.544/0.529), not the coders. The reconstruction axis is SAE-only:
+the transcoder's own-objective reconstruction could not be cleanly isolated through external HF hooks
+(sparsify's transcode hookpoints), and sparsify's `ForwardOutput.fvu` measures input-reconstruction
+(inflated by the skip), so we do not report a transcoder reconstruction number rather than report a wrong
+one. **We can neither confirm nor refute the "transcoders Pareto-dominate SAEs" hypothesis in this
+budget/scorer regime** — a valid, pre-registered outcome (R4). The scorer-*independent* signal is pursued
+in Phase 4 (randomized-model probing gap).
 
 ## What's next (Phases 3–4)
 
