@@ -47,6 +47,10 @@ full_image = base_image.run_commands(
     # torchvision is an unused transitive dep whose video API breaks the HF `datasets` torch
     # formatter (ImportError: VideoReader) during delphi's text caching — remove it.
     "pip uninstall -y torchvision || true",
+    # flashinfer JIT-compiles CUDA kernels at runtime, but this image has the CUDA runtime, not the
+    # toolkit (no nvcc/CUDA_HOME) — its sampler build fails in vLLM. Remove it so vLLM falls back to
+    # prebuilt FlashAttention + the native PyTorch sampler (no compilation needed). (ADR-0003)
+    "pip uninstall -y flashinfer-python flashinfer || true",
 )
 
 app = modal.App("microscope-infra")
@@ -426,9 +430,9 @@ def auto_interp(
     label accordingly (R4). Capped at <=500 latents (RULES.md C3)."""
     import os
 
-    # Force the vLLM V0 engine BEFORE any vllm import: the V1 engine-core subprocess fails to
-    # initialize in this container ("Engine core initialization failed"); V0 inits in-process.
-    os.environ.setdefault("VLLM_USE_V1", "0")
+    # Belt-and-suspenders: also disable vLLM's flashinfer sampler via env (flashinfer is uninstalled
+    # from the image because its runtime JIT needs a CUDA toolkit this image lacks — see full_image).
+    os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
 
     import asyncio
     from pathlib import Path
