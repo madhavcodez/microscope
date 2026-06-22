@@ -52,6 +52,35 @@ internal); (4) the saved **dictionary format** + how to save/load a trained dict
 `delphi.sparse_coders.load_sparsify` loader contract and whether SAEBench can consume the same artifact
 (or needs an adapter). Pin the verified install command + version here once confirmed.
 
+## E4 verification results (2026-06-22, sparsify **1.3.0** on the Modal image)
+Confirmed it is EleutherAI's sparsify (not Neural Magic's): module at
+`site-packages/sparsify/__init__.py`, exports `Sae, SaeConfig, SparseCoder, SparseCoderConfig,
+TranscoderConfig, Trainer, SaeTrainer, TrainConfig`.
+- **SAE vs skip-transcoder = two config flags on the SAME `SaeConfig`/`Trainer`** (the fair-comparison
+  property this ADR needed): `SaeConfig` fields = `activation, expansion_factor, normalize_decoder,
+  num_latents, k, multi_topk, skip_connection, transcode`. → **SAE**: `transcode=False,
+  skip_connection=False`; **skip-transcoder**: `transcode=True, skip_connection=True`.
+- **`TrainConfig`** fields = `sae (SaeConfig), batch_size, grad_acc_steps, micro_acc_steps, loss_fn
+  ('ce'|'fvu'|'kl'), optimizer ('adam'|'muon'|'signum'), lr, lr_warmup_steps, k_decay_steps,
+  auxk_alpha, dead_feature_threshold, exclude_tokens, hookpoints, init_seeds, layers, layer_stride,
+  distribute_modules, save_every, save_best, finetune, log_to_wandb, run_name, wandb_log_frequency,
+  save_dir`. Hookpoint via `hookpoints=[...]` or `layers=[N]` (+`layer_stride`).
+- **Entry point**: `Trainer(cfg: TrainConfig, dataset, model: PreTrainedModel)` — activations computed
+  on-the-fly from the HF model (no disk cache, good for C3). (Confirm the train-launch method name —
+  `.fit()` vs `.train()` — when writing the wrapper.)
+- **Dictionary I/O**: `Sae`/`SparseCoder` expose `encode, decode, save_to_disk, load_from_disk,
+  load_from_hub, load_many, set_decoder_norm_to_unit_norm`. So save with `save_to_disk`, reload with
+  `load_from_disk` → satisfies "saved and loadable".
+- **Width/sparsity mapping**: width via `num_latents` (absolute; 16384 ≈ Gemma Scope 16k) or
+  `expansion_factor` (×d_model=2304). TopK `activation="topk"` with `k` = the exact L0 → pick `k≈64–80`
+  to be comparable to the Gemma Scope L0≈82 reference; SAE and transcoder MUST share `k`/width.
+- **CLI confirms**: `--transcode bool`, `--skip_connection bool`, `--activation {groupmax,topk}`,
+  `--expansion_factor`, `--hookpoints`, `--layers`, `--k`, `--data_args`.
+- **delphi glue exists**: `delphi.sparse_coders.load_sparsify` is present (a module) — the exact loader
+  function + its contract is the Phase-3 integration to verify (don't assume the artifact is drop-in).
+- No divergence from the decision above; install pinned: `pip install
+  git+https://github.com/EleutherAI/sparsify.git` (resolved to 1.3.0).
+
 ## Consequences
 - (+) A methodologically fair SAE-vs-skip-transcoder comparison in the same recipe.
 - (−) Two training runs on Gemma-2-2B (SAE + transcoder) — both are cost-gated (~$5/90 min each; if
