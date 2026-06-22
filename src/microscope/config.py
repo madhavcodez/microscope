@@ -26,6 +26,20 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
+# Gates (research integrity)
+
+
+class ReproductionGateError(RuntimeError):
+    """Raised when RULES.md R1 is violated: custom training attempted before a known result.
+
+    R1 ("reproduction before novelty") forbids training a custom SAE/transcoder until the pipeline
+    has reproduced a known Gemma Scope result and logged it in ``docs/EXPERIMENTS.md``. This is the
+    research-integrity gate; it is deliberately distinct from the GPU/library gate exceptions in
+    :mod:`microscope._pending` (``GpuImplementationPending`` / ``GpuStackUnavailable``), which are
+    about environment availability, not research validity.
+    """
+
+
 # Project paths
 
 
@@ -272,3 +286,74 @@ def append_experiment_row(record: RunRecord, *, path: Path | None = None) -> Non
 
     with target.open("a", encoding="utf-8") as fh:
         fh.write(row)
+
+
+# R1 reproduction gate
+
+
+def _split_markdown_row(line: str) -> list[str]:
+    """Split one markdown table line into stripped cells, tolerant of leading/trailing pipes.
+
+    ``| a | b |`` and ``a | b`` both yield ``['a', 'b']``. Empty edge cells produced by the
+    surrounding pipes are dropped; interior empty cells are preserved so columns stay aligned.
+    """
+    stripped = line.strip()
+    parts = [cell.strip() for cell in stripped.split("|")]
+    if parts and parts[0] == "":
+        parts = parts[1:]
+    if parts and parts[-1] == "":
+        parts = parts[:-1]
+    return parts
+
+
+def reproduction_logged(path: Path | None = None) -> bool:
+    """Return True iff ``docs/EXPERIMENTS.md`` has a data row labelled 'reproduced' (RULES.md R1).
+
+    Parses the EXPERIMENTS.md markdown table, finds the header row (the line starting with
+    ``| run_id``), locates the column whose header contains ``label`` (the full header is
+    ``label (repro/novel/inconclusive)``), then scans every data row and checks whether that
+    column's cell — stripped and lowercased — contains ``reproduced``.
+
+    This is the mechanical R1 gate: it answers "has the pipeline reproduced a known result yet?"
+    so callers (e.g. the ``train`` command) can refuse to start custom training until it has.
+
+    Args:
+        path: EXPERIMENTS.md to inspect. Defaults to the module's :data:`EXPERIMENTS_PATH`.
+
+    Returns:
+        True if at least one data row's label cell contains 'reproduced', else False. A missing
+        file, an absent header, or a table with no data rows all return False (fail closed — the
+        gate stays shut when there is no positive evidence of a reproduction).
+    """
+    target = path or EXPERIMENTS_PATH
+    if not target.exists():
+        return False
+
+    lines = target.read_text(encoding="utf-8").splitlines()
+
+    header_index: int | None = None
+    label_col: int | None = None
+    for i, line in enumerate(lines):
+        if line.strip().startswith("| run_id"):
+            cells = _split_markdown_row(line)
+            for col, name in enumerate(cells):
+                if "label" in name.strip().lower():
+                    label_col = col
+                    break
+            header_index = i
+            break
+
+    if header_index is None or label_col is None:
+        return False
+
+    # Data rows are the pipe-prefixed lines after the header, skipping the '|---' separator row.
+    for line in lines[header_index + 1 :]:
+        if not line.strip().startswith("|"):
+            continue
+        if set(line.strip()) <= {"|", "-", ":", " "}:
+            continue  # separator row (e.g. |---|---|)
+        cells = _split_markdown_row(line)
+        if label_col < len(cells) and "reproduced" in cells[label_col].strip().lower():
+            return True
+
+    return False

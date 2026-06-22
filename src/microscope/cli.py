@@ -18,7 +18,15 @@ from rich.table import Table
 
 from . import __version__
 from ._pending import GpuImplementationPending, GpuStackUnavailable
-from .config import RunConfig, config_hash, git_commit, hardware_info, load_config, set_seed
+from .config import (
+    RunConfig,
+    config_hash,
+    git_commit,
+    hardware_info,
+    load_config,
+    reproduction_logged,
+    set_seed,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -78,6 +86,15 @@ def train(
     kind: str = typer.Option("sae", help="'sae' or 'transcoder' (skip-transcoder)."),
 ) -> None:
     """Phase 2: train a custom SAE or skip-transcoder (smoke-test on Pythia-70M first)."""
+    if not reproduction_logged():
+        console.print(
+            "[bold red]BLOCKED by RULES.md R1 (reproduction before novelty).[/bold red]\n"
+            "No row labelled 'reproduced' exists in docs/EXPERIMENTS.md, so custom SAE/transcoder "
+            "training is not permitted yet. Reproduce a known Gemma Scope result first "
+            "(`microscope reproduce ...`) and log it, then re-run `train`."
+        )
+        raise typer.Exit(code=3)
+
     from .saes.train import train_coder
 
     cfg = _prepare(config)

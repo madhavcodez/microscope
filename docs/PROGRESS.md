@@ -80,3 +80,24 @@ Phase 2 (custom SAE + transcoder training) NOT started.
   - [coverage] project_root cwd-fallback + git_commit OSError branch were untested (CPU-reachable):
     tests added; config.py 88%->91%, total 95%.
   - Re-verified post-fix: 74 passed, 95% coverage, ruff/format/mypy all clean.
+
+## Coder log
+- 2026-06-22 (coder): Implemented the previously-DEFERRED R1 mechanical gate (closes the MEDIUM
+  integrity item in the QC log above). Pure-CPU, stdlib-only, no new deps.
+  - config.py: added `reproduction_logged(path: Path | None = None) -> bool` — parses
+    EXPERIMENTS.md, finds the `| run_id` header, locates the column whose header contains 'label',
+    scans data rows (skips the `|---` separator), returns True iff any label cell contains
+    'reproduced' (case-insensitive, substring). Missing file / no data rows -> False (fail closed).
+    Helper `_split_markdown_row` tolerates leading/trailing pipes + whitespace. Also added
+    `class ReproductionGateError(RuntimeError)` (R1 gate; distinct from _pending GPU gates).
+  - cli.py: `train` now calls `reproduction_logged()` BEFORE `_prepare`/`_run_stage`; if False it
+    prints a red message naming RULES.md R1 and `raise typer.Exit(code=3)`. Exit code 3 = R1 gate
+    (distinct from code 2 = GPU/E4 gate). Imported `reproduction_logged` from `.config`.
+  - Gate currently PASSES (EXPERIMENTS.md has reproduced rows repro-001/002/003) — verified
+    `reproduction_logged()` returns True. Verified via Typer CliRunner: train with an empty/no-repro
+    table -> exit 3 + R1 message + `_prepare` NOT reached; train with real table -> R1 passes
+    through to the existing exit-2 GPU/E4 gate (unregressed).
+  - Checks: `python -c "import microscope.cli"` OK; full pytest 94 passed; ruff check + ruff format
+    + mypy all clean on config.py + cli.py. NOTE: did NOT add unit tests (tester's unit). Coverage
+    of the new branches is currently exercised only by my ad-hoc CliRunner check, not the committed
+    suite — tester must add regression tests (see handoff). Did not commit (per instruction).
