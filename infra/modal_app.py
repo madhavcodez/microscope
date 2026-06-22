@@ -1211,3 +1211,106 @@ def probe_saebench_adapter() -> dict:
     for k, v in out.items():
         print(f"=== {k} ===\n{v}\n")
     return out
+
+
+@app.function(
+    image=pkg_image, gpu="L4", secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=2400, retries=0,
+)
+def probing_eval(run_name: str, randomize: bool = False, layer: int = 12,
+                 n_per_class: int = 300, seq_len: int = 64) -> dict:
+    """Scorer-INDEPENDENT control signal (ADR-0005 Control A primary): linear-probe accuracy of an
+    SAE's features on a bias-in-bios profession contrast. Run for the real-model SAE and the
+    randomized-model SAE; the GAP (real > random) = the real SAE encodes model-learned structure.
+
+    A coder's features are probed on ITS OWN model's resid@L (real SAE -> real gemma; random SAE ->
+    the same seeded randomized gemma). Minimal logistic probe (same code both sides) rather than the
+    full SAEBench adapter; the GAP is the signal (repro-003 established the SAEBench reference)."""
+    import os
+
+    import numpy as np
+    import sparsify
+    import torch
+    from datasets import load_dataset
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import train_test_split
+    from transformers import AutoConfig, AutoModel, AutoTokenizer
+
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    dev = "cuda"
+    coder = sparsify.SparseCoder.load_from_disk(
+        f"/root/outputs/coders/{run_name}/layers.{layer}", device=dev
+    ).to(dev, torch.bfloat16)
+    d_sae = int(coder.cfg.num_latents)
+
+    model = AutoModel.from_pretrained("google/gemma-2-2b", torch_dtype=torch.bfloat16, token=token).to(dev)
+    if randomize:  # rebuild the SAME seeded randomized model the random SAE was trained on (ADR-0005)
+        torch.manual_seed(0)
+        emb = model.get_input_embeddings().weight.data.clone()
+        model = AutoModel.from_config(AutoConfig.from_pretrained("google/gemma-2-2b", token=token)).to(
+            dev, torch.bfloat16
+        )
+        model.get_input_embeddings().weight.data.copy_(emb)
+    model.eval()
+    tok = AutoTokenizer.from_pretrained("google/gemma-2-2b", token=token)
+    lm = model.layers[layer]
+
+    ds = load_dataset("LabHC/bias_in_bios_class_set1", split="train")
+    cols = ds.column_names
+    text_col = "text" if "text" in cols else ("hard_text" if "hard_text" in cols else cols[0])
+    label_col = "label" if "label" in cols else ("profession" if "profession" in cols else cols[-1])
+    labels_all = ds[label_col]
+    from collections import Counter
+
+    top2 = [c for c, _ in Counter(labels_all).most_common(2)]
+    rows = {c: [] for c in top2}
+    for tx, lb in zip(ds[text_col], labels_all):
+        if lb in rows and len(rows[lb]) < n_per_class and tx and tx.strip():
+            rows[lb].append(tx)
+    texts = rows[top2[0]] + rows[top2[1]]
+    y = np.array([0] * len(rows[top2[0]]) + [1] * len(rows[top2[1]]))
+
+    cap: dict = {}
+
+    def dense_feats(x):
+        enc = coder.encode(x)
+        if torch.is_tensor(enc) and enc.shape[-1] == d_sae:
+            return enc.float()
+        ta = getattr(enc, "top_acts", None)
+        ti = getattr(enc, "top_indices", None)
+        if ta is None and isinstance(enc, (tuple, list)):
+            ta, ti = enc[0], enc[1]
+        out = torch.zeros(x.shape[0], d_sae, device=x.device, dtype=torch.float32)
+        out.scatter_(1, ti.long(), ta.float())
+        return out
+
+    X = []
+    with torch.no_grad():
+        for tx in texts:
+            ids = tok(tx, return_tensors="pt", truncation=True, max_length=seq_len).input_ids.to(dev)
+            h = lm.register_forward_hook(lambda m, i, o: cap.__setitem__("y", o[0] if isinstance(o, tuple) else o))
+            model(ids)
+            h.remove()
+            xx = cap["y"][0, 1:].to(torch.bfloat16)
+            X.append(dense_feats(xx).mean(0).cpu().numpy())
+    X = np.array(X)
+    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.3, random_state=0, stratify=y)
+    clf = LogisticRegression(max_iter=2000, C=0.5).fit(Xtr, ytr)
+    pred = clf.predict(Xte)
+    acc = float((pred == yte).mean())
+    rng = np.random.default_rng(0)
+    boot = [float((pred[i] == yte[i]).mean()) for i in (rng.integers(0, len(yte), len(yte)) for _ in range(2000))]
+    lo, hi = np.percentile(boot, [2.5, 97.5])
+    out = {
+        "run_name": run_name, "randomize": randomize, "classes": [int(c) for c in top2],
+        "n_examples": len(texts), "sae_probe_acc": round(acc, 4),
+        "acc_ci95": [round(float(lo), 4), round(float(hi), 4)],
+        "d_sae": d_sae, "text_col": text_col, "label_col": label_col,
+    }
+    import json as _json
+
+    with open(f"/root/outputs/probing_{'random' if randomize else 'real'}.json", "w") as fh:
+        _json.dump(out, fh)
+    artifacts_vol.commit()
+    print("PROBING RESULT:", out)
+    return out
