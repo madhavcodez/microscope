@@ -44,6 +44,9 @@ full_image = base_image.run_commands(
     "pip install sae-bench || pip install 'git+https://github.com/adamkarvonen/SAEBench.git' || true",
     "pip install 'git+https://github.com/EleutherAI/delphi.git' || true",
     "pip install 'git+https://github.com/saprmarks/feature-circuits.git' || true",
+    # torchvision is an unused transitive dep whose video API breaks the HF `datasets` torch
+    # formatter (ImportError: VideoReader) during delphi's text caching — remove it.
+    "pip uninstall -y torchvision || true",
 )
 
 app = modal.App("microscope-infra")
