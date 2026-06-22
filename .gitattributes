@@ -1,0 +1,7 @@
+# Normalize line endings. Shell scripts MUST be LF so they run on the Linux GPU host.
+* text=auto eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
