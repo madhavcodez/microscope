@@ -237,7 +237,7 @@ def train_coder(config: RunConfig, kind: CoderKind) -> dict[str, Any]:
 
     # --- Load the model + tokenizer (lazy, GPU-only) ---
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = AutoModel.from_pretrained(settings["model"], torch_dtype="auto").to(device)
+    model = AutoModel.from_pretrained(settings["model"], torch_dtype=torch.bfloat16).to(device)
     tokenizer = AutoTokenizer.from_pretrained(settings["model"])
 
     # sparsify computes activations on-the-fly, but Trainer needs a TOKENIZED arrow Dataset

@@ -200,7 +200,7 @@ def pkg_smoke() -> dict[str, str]:
     gpu="L4",
     secrets=[HF_SECRET],
     volumes={**CACHE, "/root/outputs": artifacts_vol},
-    timeout=3600,
+    timeout=5400,
     retries=0,
 )
 def train_coder_modal(config_dict: dict, kind: str = "sae") -> dict:
@@ -215,6 +215,7 @@ def train_coder_modal(config_dict: dict, kind: str = "sae") -> dict:
     from microscope.saes.train import train_coder
 
     # Redirect the dictionary save into the mounted persistent Volume (overrides the YAML save_dir).
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     cfg = RunConfig(**{**config_dict, "save_dir": "/root/outputs/coders"})
     result = train_coder(cfg, kind)  # type: ignore[arg-type]
 

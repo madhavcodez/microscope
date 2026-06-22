@@ -29,6 +29,6 @@ width: 16384
 # SAE and transcoder MUST share this k (ADR-0004).
 k: 64
 activation: topk                     # sparsify SaeConfig.activation: 'topk' (k = exact L0) | 'groupmax'
-batch_size: 16
+batch_size: 8
 lr: 1.0e-4
 save_dir: outputs/coders             # Sae.save_to_disk target dir; run subfolder = run_name
