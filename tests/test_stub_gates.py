@@ -38,62 +38,64 @@ def test_harvest_activations_stub_raises_pending(cfg: RunConfig) -> None:
         harvest_activations(cfg)
 
 
-def test_load_pretrained_sae_raises_runtime_error_without_gpu_stack(cfg: RunConfig) -> None:
+def test_load_pretrained_sae_raises_gpu_stack_unavailable(cfg: RunConfig) -> None:
     # Arrange: load_pretrained_sae is now IMPLEMENTED (not a GpuImplementationPending stub). On this
-    # CPU box sae_lens is absent, so it must raise a clear RuntimeError naming the Modal [gpu] image
-    # (NOT GpuImplementationPending). The lazy import keeps the module importable on CPU.
+    # CPU box sae_lens is absent, so it raises GpuStackUnavailable naming the Modal [gpu] image. The
+    # lazy import keeps the module importable on CPU.
     from microscope.reproduce.gemma_scope import load_pretrained_sae
 
     # Act / Assert
-    with pytest.raises(RuntimeError, match=r"sae_lens"):
+    with pytest.raises(GpuStackUnavailable, match=r"sae_lens"):
         load_pretrained_sae(cfg)
 
 
-def test_load_pretrained_sae_runtime_error_is_not_pending(cfg: RunConfig) -> None:
-    # Arrange: pin the behaviour change — the RuntimeError must NOT be a GpuImplementationPending
-    # (that would mean the function was never actually implemented).
+def test_load_pretrained_sae_error_is_runtime_not_pending(cfg: RunConfig) -> None:
+    # Arrange: pin the behaviour change — GpuStackUnavailable IS a RuntimeError (callers catching
+    # RuntimeError still work) but is NOT GpuImplementationPending (it is implemented, not a stub).
     from microscope.reproduce.gemma_scope import load_pretrained_sae
 
     # Act
-    with pytest.raises(RuntimeError) as exc_info:
+    with pytest.raises(GpuStackUnavailable) as exc_info:
         load_pretrained_sae(cfg)
 
     # Assert
+    assert isinstance(exc_info.value, RuntimeError)
     assert not isinstance(exc_info.value, GpuImplementationPending)
     assert "[gpu]" in str(exc_info.value).lower()
 
 
-def test_reproduce_raises_runtime_error_without_gpu_stack(cfg: RunConfig) -> None:
+def test_reproduce_raises_gpu_stack_unavailable(cfg: RunConfig) -> None:
     # Arrange: reproduce() now does real work (load SAE -> harvest -> metrics). Its first step
-    # (load_pretrained_sae) hits the missing sae_lens import on CPU, so reproduce raises a
-    # RuntimeError naming the Modal [gpu] image -- NOT GpuImplementationPending.
+    # (load_pretrained_sae) hits the missing sae_lens import on CPU, so reproduce raises
+    # GpuStackUnavailable naming the Modal [gpu] image -- NOT GpuImplementationPending.
     from microscope.reproduce.gemma_scope import reproduce
 
     # Act / Assert
-    with pytest.raises(RuntimeError, match=r"\[gpu\]"):
+    with pytest.raises(GpuStackUnavailable, match=r"\[gpu\]"):
         reproduce(cfg)
 
 
-def test_reproduce_runtime_error_is_not_pending(cfg: RunConfig) -> None:
+def test_reproduce_error_is_runtime_not_pending(cfg: RunConfig) -> None:
     # Arrange: confirm reproduce() is genuinely implemented, not a renamed stub.
     from microscope.reproduce.gemma_scope import reproduce
 
     # Act
-    with pytest.raises(RuntimeError) as exc_info:
+    with pytest.raises(GpuStackUnavailable) as exc_info:
         reproduce(cfg)
 
     # Assert
+    assert isinstance(exc_info.value, RuntimeError)
     assert not isinstance(exc_info.value, GpuImplementationPending)
 
 
-def test_harvest_resid_activations_raises_runtime_error_without_gpu_stack(cfg: RunConfig) -> None:
-    # Arrange: harvest_resid_activations is the verified (implemented) recipe; transformer_lens is
-    # absent on CPU, so it raises a RuntimeError naming the Modal [gpu] image (NOT pending). The
-    # transformer_lens import gate fires before the layer-is-None check, so cfg layer is irrelevant.
+def test_harvest_resid_activations_raises_gpu_stack_unavailable(cfg: RunConfig) -> None:
+    # Arrange: harvest_resid_activations is the verified (implemented) recipe. transformer_lens is
+    # absent on CPU, so it raises GpuStackUnavailable naming the Modal [gpu] image (NOT pending).
+    # The import gate fires before the layer-is-None check, so cfg's missing layer never matters.
     from microscope.activations import harvest_resid_activations
 
     # Act / Assert
-    with pytest.raises(RuntimeError, match=r"transformer_lens"):
+    with pytest.raises(GpuStackUnavailable, match=r"transformer_lens"):
         harvest_resid_activations(cfg)
 
 
