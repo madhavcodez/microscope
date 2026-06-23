@@ -1294,6 +1294,180 @@ def probe_saebench_adapter() -> dict:
 
 
 @app.function(
+    image=full_image, secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=600, retries=0,
+)
+def probe_saebench_adapter2() -> dict:
+    """E4 (Phase 4 dep, deeper): pin the exact sae_lens inference TopK SAE class + config + constructor,
+    SAEBench's check_decoder_norms / _standardize_sae_cfg requirements, and which sae.cfg/metadata
+    fields sparse_probing reads. Everything needed to construct the adapter without guessing."""
+    import dataclasses
+    import inspect
+
+    import sae_lens
+
+    out: dict = {}
+    # Full public class list (the first probe truncated at 300 chars).
+    out["sae_lens.public_full"] = ", ".join(n for n in dir(sae_lens) if not n.startswith("_"))
+
+    # Inference (non-Training) SAE classes + their config classes + constructor signatures.
+    for name in (
+        "SAE", "StandardSAE", "TopKSAE", "TopK", "BatchTopKSAE", "JumpReLUSAE", "GatedSAE",
+        "StandardSAEConfig", "TopKSAEConfig", "BatchTopKSAEConfig",
+    ):
+        obj = getattr(sae_lens, name, None)
+        if obj is None:
+            continue
+        if dataclasses.is_dataclass(obj):
+            fields = []
+            for f in dataclasses.fields(obj):
+                d = "" if f.default is dataclasses.MISSING else f"={f.default!r}"
+                fields.append(f"{f.name}:{getattr(f.type, '__name__', f.type)}{d}")
+            out[f"{name}<dataclass fields>"] = ", ".join(fields)[:600]
+        else:
+            try:
+                out[f"{name}.__init__"] = f"{name}{inspect.signature(obj.__init__)}"[:300]
+            except (ValueError, TypeError):
+                out[f"{name}"] = "class (no init sig)"
+            # Does this class expose a topk architecture marker / get_sae_config helper?
+            for attr in ("architecture", "get_sae_config_class", "cfg_class"):
+                if hasattr(obj, attr):
+                    out[f"{name}.{attr}"] = str(getattr(obj, attr))[:120]
+
+    # The base SAEConfig + how to build a TopK metadata; metadata class fields.
+    for cfgname in ("SAEConfig", "SAEMetadata"):
+        obj = getattr(sae_lens, cfgname, None)
+        if obj is not None and dataclasses.is_dataclass(obj):
+            out[f"{cfgname}_fields"] = ", ".join(f.name for f in dataclasses.fields(obj))[:500]
+
+    # SAEBench: check_decoder_norms + _standardize_sae_cfg source (what cfg shape they require).
+    try:
+        from sae_bench.sae_bench_utils import general_utils
+
+        for fn in ("check_decoder_norms", "_standardize_sae_cfg"):
+            f = getattr(general_utils, fn, None)
+            if f is not None:
+                out[f"src::{fn}"] = inspect.getsource(f)[:900]
+    except Exception as exc:  # noqa: BLE001
+        out["general_utils"] = f"FAIL: {exc}"
+
+    # sparse_probing main: how does it pull activations from the SAE? (encode? cfg.metadata.hook_name?)
+    try:
+        from sae_bench.evals.sparse_probing import main as sp
+
+        src = inspect.getsource(sp)
+        for needle in ("hook_name", "hook_layer", ".encode(", "load_and_format_sae", "metadata"):
+            idx = src.find(needle)
+            out[f"sp_uses::{needle}"] = (
+                "NOT FOUND" if idx < 0 else src[max(0, idx - 80): idx + 80].replace("\n", " ")
+            )
+    except Exception as exc:  # noqa: BLE001
+        out["sparse_probing.main"] = f"FAIL: {exc}"
+
+    for k, v in out.items():
+        print(f"=== {k} ===\n{v}\n")
+    return out
+
+
+@app.function(
+    image=full_image, secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=600, retries=0,
+)
+def probe_saebench_adapter3() -> dict:
+    """E4 final: cfg<->metadata duality (does sae.cfg.hook_name exist as a top-level property?),
+    SAEMetadata fields, how SAE.encode behaves for TopK, and how SAEBench extracts activations
+    (does it call sae.encode, or run the model at hook_name and then sae.encode_standard?)."""
+    import dataclasses
+    import inspect
+
+    import sae_lens
+    import torch
+
+    out: dict = {}
+
+    # Where does SAEMetadata live + its fields?
+    from sae_lens.saes.sae import SAEMetadata  # v6 location
+
+    out["SAEMetadata_module"] = SAEMetadata.__module__
+    if dataclasses.is_dataclass(SAEMetadata):
+        out["SAEMetadata_fields"] = ", ".join(f.name for f in dataclasses.fields(SAEMetadata))[:600]
+    # Does SAEConfig expose hook_name/hook_layer/model_name as top-level attrs (properties)?
+    cfgcls = sae_lens.SAEConfig
+    out["SAEConfig_props"] = ", ".join(
+        n for n in dir(cfgcls) if not n.startswith("_") and isinstance(getattr(cfgcls, n, None), property)
+    )[:300]
+
+    # Full _standardize_sae_cfg source (was truncated): does it WRITE hook_name/hook_layer onto cfg?
+    try:
+        from sae_bench.sae_bench_utils import general_utils
+
+        out["full_standardize_src"] = inspect.getsource(general_utils._standardize_sae_cfg)[:2000]
+        out["get_cfg_meta_field_src"] = inspect.getsource(general_utils._get_cfg_meta_field)[:800]
+    except Exception as exc:  # noqa: BLE001
+        out["standardize_src"] = f"FAIL: {exc}"
+
+    # Build a tiny real TopKSAE and check: does cfg.hook_name / cfg.hook_layer resolve from metadata?
+    try:
+        TopKSAEConfig = sae_lens.TopKSAEConfig
+        TopKSAE = sae_lens.TopKSAE
+        md = SAEMetadata(
+            model_name="gemma-2-2b", hook_name="blocks.12.hook_resid_post", hook_layer=12
+        )
+        cfg = TopKSAEConfig(d_in=8, d_sae=16, k=4, dtype="float32", device="cpu", metadata=md)
+        sae = TopKSAE(cfg)
+        # After standardize, does cfg.hook_name become a top-level attr?
+        try:
+            from sae_bench.sae_bench_utils import general_utils as _gu
+
+            _gu._standardize_sae_cfg(cfg)
+            out["post_standardize.cfg.hook_name"] = repr(getattr(cfg, "hook_name", "MISSING"))
+            out["post_standardize.cfg.hook_layer"] = repr(getattr(cfg, "hook_layer", "MISSING"))
+            out["post_standardize.cfg.model_name"] = repr(getattr(cfg, "model_name", "MISSING"))
+        except Exception as exc:  # noqa: BLE001
+            out["post_standardize"] = f"FAIL: {type(exc).__name__}: {str(exc)[:200]}"
+        out["built_topk"] = type(sae).__name__
+        for attr in ("hook_name", "hook_layer", "model_name"):
+            out[f"cfg.{attr}"] = repr(getattr(cfg, attr, "MISSING"))
+            out[f"cfg.metadata.{attr}"] = repr(getattr(md, attr, "MISSING"))
+        # encode/decode round-trip shape + dtype.
+        x = torch.randn(3, 8)
+        enc = sae.encode(x)
+        dec = sae.decode(enc)
+        out["encode_shape"] = str(tuple(enc.shape))
+        out["decode_shape"] = str(tuple(dec.shape))
+        out["encode_nonzeros_per_row"] = str(int((enc[0] != 0).sum()))
+        out["W_dec_shape"] = str(tuple(sae.W_dec.shape))
+        out["W_dec_row_norms~1"] = str(
+            bool(torch.allclose(sae.W_dec.norm(dim=1), torch.ones(16), atol=1e-4))
+        )
+        # state_dict keys (so we know what to load sparsify weights into).
+        out["topk_state_keys"] = ", ".join(
+            f"{k}{tuple(v.shape)}" for k, v in sae.state_dict().items()
+        )[:400]
+    except Exception as exc:  # noqa: BLE001
+        import traceback
+
+        out["build_topk"] = f"FAIL: {type(exc).__name__}: {exc}\n{traceback.format_exc()[:500]}"
+
+    # How does SAEBench's sparse_probing get activations? Inspect the activation-collection fn.
+    try:
+        from sae_bench.evals.sparse_probing import probe_training
+
+        src = inspect.getsource(probe_training)
+        for needle in (".encode(", "encode_standard", "run_with_cache", "hook_name", "def "):
+            idx = src.find(needle)
+            out[f"probe_training::{needle}"] = (
+                "NOT FOUND" if idx < 0 else src[max(0, idx - 60): idx + 90].replace("\n", " ")
+            )
+    except Exception as exc:  # noqa: BLE001
+        out["probe_training"] = f"n/a: {type(exc).__name__}: {str(exc)[:120]}"
+
+    for k, v in out.items():
+        print(f"=== {k} ===\n{v}\n")
+    return out
+
+
+@app.function(
     image=pkg_image, gpu="L4", secrets=[HF_SECRET],
     volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=2400, retries=0,
 )
@@ -1729,4 +1903,223 @@ def circuit_eval(run_name: str = "train_gemma2_2b_l12-sae", layer: int = 12,
         _json.dump(out, fh)
     artifacts_vol.commit()
     print("CIRCUIT RESULT:", {k: v for k, v in out.items() if k != "top10_attribution"})
+    return out
+
+
+def _sparsify_to_topk_sae(coder_dir: str, layer: int, device: str, dtype: str = "float32"):
+    """Adapter: load an EleutherAI sparsify TopK SparseCoder and return a native sae_lens TopKSAE
+    holding the same weights, so SAEBench's load_and_format_sae accepts it as a custom SAE object.
+
+    Verified on Modal (E4: probe_saebench_adapter / _adapter2 / _adapter3, sae_lens 6.44.3):
+      * sparsify state: W_dec(d_sae,d_in), b_dec(d_in,), encoder.weight(d_sae,d_in),
+        encoder.bias(d_sae,)
+      * sae_lens TopKSAE state: W_enc(d_in,d_sae), b_enc(d_sae,), W_dec(d_sae,d_in), b_dec(d_in,)
+        => W_enc = encoder.weight.T ; b_enc = encoder.bias ; W_dec/b_dec copy across.
+      * TopKSAEConfig carries k; cfg.hook_name/hook_layer/model_name resolve from cfg.metadata
+        (SAEMetadata at sae_lens.saes.sae) -- exactly the fields sparse_probing reads.
+    Returns (TopKSAE in eval mode on `device`, info dict)."""
+    import sparsify
+    import torch
+    from sae_lens import TopKSAE, TopKSAEConfig
+    from sae_lens.saes.sae import SAEMetadata
+
+    coder = sparsify.SparseCoder.load_from_disk(coder_dir, device=device)
+    if bool(getattr(coder.cfg, "transcode", False)) or bool(
+        getattr(coder.cfg, "skip_connection", False)
+    ):
+        raise ValueError(
+            "sparse_probing adapter is for residual SAEs only; this coder is a transcoder/skip "
+            f"(transcode={coder.cfg.transcode}, skip={coder.cfg.skip_connection}). Mark N/A (R3)."
+        )
+    sd = coder.state_dict()
+    d_sae = int(coder.cfg.num_latents)
+    k = int(coder.cfg.k)
+    d_in = int(sd["W_dec"].shape[1])
+
+    torch_dtype = getattr(torch, dtype)
+    cfg = TopKSAEConfig(
+        d_in=d_in,
+        d_sae=d_sae,
+        k=k,
+        dtype=dtype,
+        device=device,
+        apply_b_dec_to_input=False,  # sparsify TopK does not subtract b_dec before encode
+        normalize_activations="none",
+        metadata=SAEMetadata(
+            model_name="gemma-2-2b",
+            hook_name=f"blocks.{layer}.hook_resid_post",
+            hook_layer=layer,
+        ),
+    )
+    sae = TopKSAE(cfg)
+    new_state = {
+        "W_enc": sd["encoder.weight"].T.contiguous().to(torch_dtype),
+        "b_enc": sd["encoder.bias"].to(torch_dtype),
+        "W_dec": sd["W_dec"].to(torch_dtype),
+        "b_dec": sd["b_dec"].to(torch_dtype),
+    }
+    missing, unexpected = sae.load_state_dict(new_state, strict=False)
+    # TopKSAE may carry extra non-persistent buffers (e.g. threshold); enc/dec weights must load.
+    if {"W_enc", "b_enc", "W_dec", "b_dec"} & set(missing):
+        raise RuntimeError(f"adapter failed to load encoder/decoder weights: missing={missing}")
+    sae = sae.to(device=device, dtype=torch_dtype).eval()
+    return sae, {
+        "d_in": d_in, "d_sae": d_sae, "k": k,
+        "missing": list(missing), "unexpected": list(unexpected),
+    }
+
+
+@app.function(
+    image=full_image, gpu="L4", secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=900, retries=0,
+)
+def verify_saebench_adapter(run_name: str = "train_gemma2_2b_l12-sae", layer: int = 12) -> dict:
+    """E4 pre-flight (cheap, ~1-2 min GPU): build the sparsify->sae_lens TopKSAE adapter and prove
+    it (a) loads weights, (b) encode/decode round-trips with exactly k active latents, (c) passes
+    SAEBench's load_and_format_sae (check_decoder_norms + _standardize_sae_cfg) WITHOUT error,
+    before paying for the full sparse_probing run. Verifies the adapter, not the eval."""
+    import torch
+
+    dev = "cuda"
+    coder_dir = f"/root/outputs/coders/{run_name}/layers.{layer}"
+    sae, info = _sparsify_to_topk_sae(coder_dir, layer, dev)
+    out: dict = {"run_name": run_name, **info, "sae_type": type(sae).__name__}
+
+    # (b) encode/decode round-trip on random activations of the right width.
+    x = torch.randn(4, info["d_in"], device=dev, dtype=sae.W_dec.dtype)
+    enc = sae.encode(x)
+    dec = sae.decode(enc)
+    out["encode_shape"] = str(tuple(enc.shape))
+    out["decode_shape"] = str(tuple(dec.shape))
+    out["active_latents_per_row"] = [int((enc[i] != 0).sum()) for i in range(enc.shape[0])]
+    out["k_enforced"] = bool(all(n == info["k"] for n in out["active_latents_per_row"]))
+    out["W_dec_row_norm_mean"] = round(float(sae.W_dec.norm(dim=1).mean()), 4)
+
+    # (c) does SAEBench accept this object? load_and_format_sae runs check_decoder_norms + standard.
+    from sae_bench.sae_bench_utils import general_utils
+
+    sae_id, formatted, _sparsity = general_utils.load_and_format_sae("custom_sae", sae, dev)
+    out["saebench_accepts"] = True
+    out["saebench_sae_id"] = sae_id
+    out["cfg.hook_name"] = str(getattr(formatted.cfg, "hook_name", "MISSING"))
+    out["cfg.hook_layer"] = str(getattr(formatted.cfg, "hook_layer", "MISSING"))
+    out["cfg.model_name"] = str(getattr(formatted.cfg, "model_name", "MISSING"))
+    out["decoder_norms_ok"] = bool(general_utils.check_decoder_norms(formatted.W_dec.data))
+
+    print("ADAPTER VERIFY:", out)
+    return out
+
+
+@app.function(
+    image=full_image, gpu="L4", secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=3600, retries=0,
+)
+def saebench_sparse_probing_custom(
+    run_name: str = "train_gemma2_2b_l12-sae",
+    layer: int = 12,
+    train_size: int = 1500,
+    test_size: int = 500,
+    seed: int = 42,
+) -> dict:
+    """Phase-3 (deferred item): full SAEBench sparse_probing on the CUSTOM sparsify SAE, via the
+    sparsify->sae_lens TopKSAE adapter (_sparsify_to_topk_sae). Same eval config as repro-003 (the
+    canonical Gemma Scope reference: SAE top-1 0.767 vs residual baseline 0.688), so the numbers are
+    directly comparable. SAEBench is residual-SAE oriented; the transcoder is N/A (R3) -- see docs.
+
+    E1: seed set+logged. E4: API verified on Modal (probe_saebench_adapter*). Budget ~$0.5 L4."""
+    import glob
+    import json
+    import os
+    import random
+
+    import numpy as np
+    import torch
+    from sae_bench.evals.sparse_probing import main as sp
+
+    # E1 determinism: set + log all seeds.
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    dev = "cuda"
+    coder_dir = f"/root/outputs/coders/{run_name}/layers.{layer}"
+    sae, info = _sparsify_to_topk_sae(coder_dir, layer, dev)
+    # SAEBench custom path: selected_saes = [(unique_id, sae_object)]; the object goes through
+    # load_and_format_sae (verified: check_decoder_norms warns-only, _standardize_sae_cfg reads
+    # hook_name/hook_layer/model_name from cfg.metadata).
+    selected_saes = [(f"custom-{run_name}", sae)]
+
+    config = sp.SparseProbingEvalConfig(
+        model_name="gemma-2-2b",
+        random_seed=seed,
+        llm_batch_size=32,
+        llm_dtype="bfloat16",
+        # Same single dataset as repro-003 (its EXPERIMENTS row = bias_in_bios_class_set1). The
+        # SAEBench build keys this dataset as '..._class_set1' (E4: probe_saebench_datasets); the
+        # bare 'LabHC/bias_in_bios' KeyErrors in chosen_classes_per_dataset.
+        dataset_names=["LabHC/bias_in_bios_class_set1"],
+        probe_train_set_size=train_size,
+        probe_test_set_size=test_size,
+        context_length=128,
+        k_values=[1],
+    )
+    out_path = "eval_results/sparse_probing_custom"
+    sp.run_eval(
+        config, selected_saes, dev, out_path,
+        force_rerun=True, clean_up_activations=True, save_activations=False,
+    )
+
+    files = glob.glob(os.path.join(out_path, "*_eval_results.json"))
+    if not files:
+        raise RuntimeError(f"no SAEBench result json written to {out_path}")
+    res = json.load(open(files[0]))
+    metrics = res.get("eval_result_metrics", {})
+    sae_m = metrics.get("sae", {})
+    llm_m = metrics.get("llm", {})
+    out = {
+        "run_name": run_name,
+        "adapter": "sparsify->sae_lens.TopKSAE",
+        "d_in": info["d_in"], "d_sae": info["d_sae"], "k": info["k"],
+        "seed": seed,
+        "dataset": "LabHC/bias_in_bios",
+        "sae_top_1_test_accuracy": sae_m.get("sae_top_1_test_accuracy"),
+        "sae_test_accuracy": sae_m.get("sae_test_accuracy"),
+        "llm_top_1_test_accuracy": llm_m.get("llm_top_1_test_accuracy"),
+        "llm_test_accuracy": llm_m.get("llm_test_accuracy"),
+        "repro003_reference": {"sae_top_1": 0.767, "llm_top_1": 0.688},
+    }
+    with open("/root/outputs/saebench_custom_sae.json", "w") as fh:
+        json.dump(out, fh)
+    artifacts_vol.commit()
+    print("SAEBENCH CUSTOM-SAE SPARSE-PROBING RESULT:", out)
+    return out
+
+
+@app.function(image=full_image, secrets=[HF_SECRET], timeout=600, retries=0)
+def probe_saebench_datasets() -> dict:
+    """E4: list the dataset keys SAEBench sparse_probing recognizes (chosen_classes_per_dataset), so
+    the eval uses a key that exists (bare 'LabHC/bias_in_bios' KeyErrors; the recognized key is
+    '..._class_set1', which is what repro-003 actually used)."""
+    import inspect
+
+    out: dict = {}
+    from sae_bench.evals.sparse_probing import main as sp
+
+    out["run_eval_sig"] = f"run_eval{inspect.signature(sp.run_eval)}"[:300]
+    out["SparseProbingEvalConfig_default_dataset_names"] = str(
+        getattr(sp.SparseProbingEvalConfig(), "dataset_names", "MISSING")
+    )[:400]
+    try:
+        from sae_bench.evals.sparse_probing import dataset_info as di
+
+        keys = list(di.chosen_classes_per_dataset.keys())
+        out["chosen_classes_keys"] = ", ".join(keys)[:600]
+        bib = [k for k in keys if "bias" in k.lower() or "bios" in k.lower()]
+        out["bias_in_bios_keys"] = ", ".join(bib) or "NONE"
+    except Exception as exc:  # noqa: BLE001
+        out["dataset_info"] = f"FAIL: {type(exc).__name__}: {str(exc)[:160]}"
+    for k, v in out.items():
+        print(f"=== {k} ===\n{v}\n")
     return out

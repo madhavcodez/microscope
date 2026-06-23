@@ -27,6 +27,7 @@ project is **honest evaluation** — see [`docs/RULES.md`](docs/RULES.md).
 | Reproduce SAEBench sparse probing (0.767 vs 0.688 baseline) | **reproduced** | `repro-003` |
 | Auto-interp pipeline (local scorer) | **method reproduced**; 3B near-chance, **7B well above chance** | `repro-004`, `ai-g2-*-7b` |
 | Custom SAE vs skip-transcoder interpretability head-to-head | **scorer-dependent: inconclusive at 3B, transcoder WINS at 7B (novel)** | `ai-g2-sae/tc` (3B) → `ai-g2-sae-7b/tc-7b` |
+| Custom SAE SAEBench sparse probing (sparsify→sae_lens adapter) | **novel (honest negative):** 0.667 < Gemma Scope 0.767 **and** < its own residual baseline 0.688 (budget training) | `saebench-custom-sae` |
 | Randomized-model control: real-model SAE > randomized-model SAE | **conclusive** (+0.072, CI [0.033, 0.117]) | `ctrl-probe-*` |
 | Steering: SAE feature vs difference-of-means | **inconclusive** (both steer; dom matches SAE, CI incl 0) | `ctrl-steer-v2` |
 | Feature circuit: 5–10 SAE features = 94–97% of full accuracy | **conclusive (novel)** | `circuit-g2-sae` |
@@ -74,6 +75,9 @@ modal run infra/modal_app.py::autointerp_main --run-name train_gemma2_2b_l12-sae
 modal run infra/modal_app.py::autointerp_main --run-name train_gemma2_2b_l12-transcoder --gpu a100
 python scripts/headtohead_autointerp.py --dir artifacts_pull   # recompute the head-to-head + CIs
 modal run infra/modal_app.py::recon_eval --run-name train_gemma2_2b_l12-sae --kind sae
+# SAEBench sparse_probing on the CUSTOM SAE (sparsify->sae_lens adapter, ADR-0007):
+modal run infra/modal_app.py::verify_saebench_adapter          # cheap pre-flight: adapter loads + accepted
+modal run infra/modal_app.py::saebench_sparse_probing_custom   # full eval on the custom SAE
 
 # Phase 4 — controls
 modal run infra/modal_app.py::train_main --config experiments/configs/train_gemma2_2b_l12.yaml --kind sae --randomize

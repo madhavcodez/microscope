@@ -17,8 +17,10 @@ recurring near-chance was a SCORER artifact (3B), not a coder limit (ai-g2-sae-7
   transcoder own-objective recon NOT cleanly isolable externally (limitation, documented — sparsify transcode
   hooks; ForwardOutput.fvu is input-recon inflated by skip). Auto-interp (delphi, custom dicts; fixed cpu->cuda
   + fp32->bf16 loader bugs): SAE det 0.540/fuzz 0.523 (n=58) vs TC det 0.539/fuzz 0.546 (n=61); both Δ bootstrap
-  CIs include 0 => no significant difference (scorer-limited, matches repro-004). SAEBench on custom coders =
-  SAE-only (resid-probing; transcoder N/A) + needs sae_lens adapter => deferred.
+  CIs include 0 => no significant difference (scorer-limited, matches repro-004). SAEBench on custom coders:
+  the deferred sae_lens adapter is now BUILT (ADR-0007, saebench-custom-sae) — custom SAE sae_top_1=0.667,
+  BELOW Gemma Scope 0.767 AND below its own residual baseline 0.688 (honest budget-training result, R4);
+  transcoder N/A (R3, resid-probing oriented).
 - **Phase 4 DONE (controls = the differentiator):**
   - Control A randomized-model (ADR-0005): PRIMARY (scorer-independent) = CONCLUSIVE. SAE-feature linear probe
     on bias_in_bios professions: real-model SAE 0.933 vs random-model SAE 0.861; PAIRED gap +0.072, CI95
@@ -45,7 +47,12 @@ recurring near-chance was a SCORER artifact (3B), not a coder limit (ai-g2-sae-7
 ## Possible follow-ups (NOT started — optional, beyond core scope)
 - ~~Calibrated Control-B steering sweep~~ DONE 2026-06-23 (ctrl-steer-v2): neutral prompt + finer grid =>
   discriminating, honestly-inconclusive (dom matches/slightly beats SAE, CI incl 0).
-- sparsify->sae_lens adapter for the full SAEBench suite on the custom coders (Phase-3 SAEBench was SAE-only).
+- ~~sparsify->sae_lens adapter for SAEBench on the custom coders (Phase-3 SAEBench was SAE-only)~~ DONE
+  2026-06-23 (ADR-0007, saebench-custom-sae): `_sparsify_to_topk_sae` wraps the sparsify SAE as a native
+  sae_lens.TopKSAE; full sparse_probing ran on the custom SAE => sae_top_1=0.667 (< Gemma Scope 0.767 AND
+  < its own residual baseline 0.688; honest budget-training result, R4). Transcoder N/A (R3). Adapter
+  verified before the paid run (verify_saebench_adapter: 4/4 weights, k=64 enforced, SAEBench accepts).
+  Remaining: scale to the full 8-dataset SAEBench suite.
 - ~~Stronger auto-interp scorer (the near-chance bottleneck throughout)~~ RESOLVED 2026-06-23
   (ai-g2-sae-7b / ai-g2-tc-7b). The L4 ATTEMPT (ai-g2-7b-ATTEMPT) was blocked because delphi keeps the
   Gemma base model resident through scoring (only ~16/22 GiB free, 7B can't start). FIX = run the 7B on an
@@ -318,3 +325,36 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
     lines; (d) 3B jsons untouched (no clobber); (e) no fabricated numbers (R5); (f) ruff adds no NEW non-E501
     issues vs the pre-existing baseline; 170 tests still pass. A 7B re-run with the same seed should
     reproduce modulo CUDA-sampling nondeterminism (E1).
+- 2026-06-23 (coder): Built the sparsify->sae_lens adapter + ran the FULL SAEBench sparse_probing on the
+  CUSTOM SAE — the last deferred Phase-3 item (ADR-0007). E4-first: ran probe_saebench_adapter (already in
+  the file) + added probe_saebench_adapter2/_adapter3/_datasets to pin the exact API on Modal before any
+  code (sae_lens 6.44.3: TopKSAE + TopKSAEConfig + SAEMetadata at sae_lens.saes.sae; cfg.hook_name resolves
+  from metadata; load_and_format_sae for a custom object only check_decoder_norms[warns]+_standardize_sae_cfg).
+  - CODE (infra/modal_app.py, all my lines ruff-CLEAN incl. no new E501): `_sparsify_to_topk_sae(coder_dir,
+    layer, device, dtype='float32')` helper — loads the sparsify SparseCoder, raises on transcode/skip
+    (R3), builds a real sae_lens.TopKSAE (W_enc=encoder.weight.T, b_enc=encoder.bias, W_dec/b_dec copied,
+    k=64, apply_b_dec_to_input=False to match sparsify, metadata=hook_name/layer/model). `verify_saebench_adapter`
+    (cheap GPU pre-flight, E4) + `saebench_sparse_probing_custom` (full eval, same config as repro-003,
+    seed 42 set+logged E1). Plus 3 CPU E4 probes (adapter2/3/datasets).
+  - RAN (Modal, PYTHONUTF8=1): (1) verify_saebench_adapter L4 ~1 min — 4/4 weights load, k=64 enforced
+    exactly, SAEBench load_and_format_sae ACCEPTS the object, cfg.hook_name/layer/model all resolve. (2)
+    First full run KeyError'd on bare 'LabHC/bias_in_bios' (SAEBench build keys it '..._class_set1', E4
+    probe_saebench_datasets); fixed the dataset key (matches repro-003's actual key). (3) Re-ran full eval
+    L4 ~6 min, exit 0. ~3 GPU iterations total (verify + 2 eval), ~$0.7 GPU all-in — under the $4 cap.
+  - RESULT (real, R5 — no fabrication): sae_top_1=0.6668; residual(llm) baseline top_1=0.6876; full-feat
+    sae=0.9532/llm=0.9648. HONEST (R4): budget SAE 0.667 < Gemma Scope 0.767 AND < its own residual baseline
+    0.688 — on this single-dataset top-1 probe the budget SAE's best feature does NOT beat the raw residual
+    (opposite of repro-003). Expected from the ~10M-token budget (recon VE 0.51). Baseline 0.688 ==
+    repro-003's 0.688 (SAE-independent) => eval sound + apples-to-apples. Transcoder N/A (R3). Decoder-norm
+    note: mean row norm ~1.004, a few rows ~0.07 off => check_decoder_norms warns (does not raise).
+  - DOCS: ADR-0007 (new), EXPERIMENTS.md (saebench-custom-sae row), REPORT.md (Phase-3 table row + new
+    SAEBench subsection + scope-table row + follow-ups status), PROGRESS (this + Phase-3 bullet + follow-up).
+    result json: /root/outputs/saebench_custom_sae.json on the microscope-artifacts volume. COMMITTED on main.
+  - HANDOFF / tester: (a) py_compile infra/modal_app.py; the 5 new fns exist (_sparsify_to_topk_sae helper,
+    verify_saebench_adapter, saebench_sparse_probing_custom, + CPU probes adapter2/3/datasets); (b) ruff
+    adds no NEW non-E501 issue on my lines (>=line ~1907) vs baseline; 170 CPU tests still pass (infra not
+    imported by the package); (c) the numbers in EXPERIMENTS/REPORT/ADR-0007 match saebench_custom_sae.json
+    on the volume (`modal volume get microscope-artifacts saebench_custom_sae.json -`) AND the SAEBENCH
+    CUSTOM-SAE RESULT stdout line; (d) the residual baseline (0.688) matches repro-003's (SAE-independent
+    sanity check); (e) no fabricated numbers (R5); the 0.667<0.688 below-baseline result is reported as-is.
+    A re-run with seed 42 + same config should reproduce (modulo minor GPU nondeterminism, E1).
