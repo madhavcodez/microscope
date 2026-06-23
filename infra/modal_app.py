@@ -1123,7 +1123,7 @@ def _auto_interp_impl(run_name: str, layer: int = 12, max_latents: int = 100,
             "mean_accuracy": round(sum(per_latent) / len(per_latent), 4) if per_latent else None,
             "per_latent": [round(v, 4) for v in per_latent],
         }
-    out["latent_sample"] = sorted(out["scores"]["detection"].get("per_latent", []) and latent_ids)[:5]
+    out["latent_sample"] = latent_ids[:5]  # a few scored-latent filenames, for reference only
     import json as _json
     with open(f"/root/outputs/autointerp_{tag}{out_suffix}.json", "w") as _fh:
         _json.dump(out, _fh)

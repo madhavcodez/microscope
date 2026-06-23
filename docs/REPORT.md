@@ -10,7 +10,7 @@ Phases 1-5 done (reproduction, custom coders, head-to-head, controls, circuit). 
 Before building anything novel, can MicroScope **reproduce known Gemma Scope SAE results** on Gemma-2-2B
 — reconstruction fidelity, a SAEBench metric, and the auto-interp pipeline — **honestly and cheaply**
 (≤ $30)? Reproduction-first (RULES.md R1) is the gate: no custom training until this passes. This report
-covers Phase 1; it labels every claim **reproduced / novel / inconclusive** and ties each to a logged
+covers Phases 1–5; it labels every claim **reproduced / novel / inconclusive** and ties each to a logged
 run in [EXPERIMENTS.md](EXPERIMENTS.md).
 
 ## The finding (summary)
@@ -127,12 +127,19 @@ interpretability-vs-reconstruction; every SAE-vs-transcoder delta is reported wi
 scorer is strong enough (7B).** With the weak 3B local scorer neither auto-interp delta's CI excludes
 zero and both coders sit near the 0.5 chance line, so at that scale we could not separate them (the
 bottleneck is the *scorer*, not the coders — repro-004 showed the identical near-chance pattern for the
-*pretrained* Gemma Scope SAE, 0.544/0.529). Re-running the **same paired latent sample** with a stronger
-**local** Qwen2.5-7B scorer (resolved 2026-06-23; see below) lifts every score well above chance **and
-flips the head-to-head**: the skip-transcoder is significantly more interpretable than the SAE on **both**
-detection (+0.053, CI [+0.016, +0.089]) and fuzzing (+0.059, CI [+0.019, +0.097]) — both CIs now exclude
-zero (unpaired diff-of-means bootstrap, seed 0, 10k resamples, the same method as the 3B row). On the
-interpretability axis this **CONFIRMS the pre-registered "transcoders beat SAEs" direction** (R4). The
+*pretrained* Gemma Scope SAE, 0.544/0.529). Re-running with a stronger **local** Qwen2.5-7B scorer (same
+pre-registered latent target + seed 0; only the scorer changes; resolved 2026-06-23, see below) lifts
+every score above chance **and flips the head-to-head**: the skip-transcoder is more interpretable than
+the SAE on **both** detection (+0.053, CI [+0.016, +0.089]) and fuzzing (+0.059, CI [+0.019, +0.097]) —
+both CIs now exclude zero (unpaired diff-of-means bootstrap, seed 0, 10k resamples, same method as the 3B
+row; robust to Welch *t* p≈0.005 and Mann-Whitney p≈0.006). Note this is an *unpaired* test over the
+surviving-latent subsets: the pre-registered plan targeted the same 100 indices, but delphi drops a
+different handful of unscoreable latents per coder (SAE n=58, TC n=60), so the comparison falls back to
+unpaired — a documented deviation, in the conservative direction. On the interpretability axis this
+**CONFIRMS the pre-registered "transcoders beat SAEs" direction** (R4), as a *relative ranking* — the
+absolute scores (0.61–0.69) are only moderately above the 0.5 chance line and well below the 0.8–0.9
+frontier-scorer literature, and this is one local 7B scorer at one model/layer/budget, not a settled
+general result. The
 reconstruction axis remains SAE-only: the transcoder's own-objective reconstruction could not be cleanly
 isolated through external HF hooks (sparsify's transcode hookpoints), and sparsify's `ForwardOutput.fvu`
 measures input-reconstruction (inflated by the skip), so we report no transcoder reconstruction number
@@ -153,7 +160,9 @@ scorer (~6 GiB) fit, which is why ai-g2 ran.
 
 **Resolution: run the 7B where the base model and the 7B coexist — an A100-40GB.** A thin GPU wrapper
 (`auto_interp_custom_a100`, `gpu="A100-40GB"`, `gpu_memory_utilization=0.65`) shares the same delphi
-config, seed, and paired latent sample as the L4 3B path; only the scorer and GPU change. Both 7B runs
+config, seed, and pre-registered latent target as the L4 3B path; only the scorer and GPU change (delphi
+drops different unscoreable latents per coder, so the surviving sets differ and the head-to-head is
+unpaired, as in the 3B row). Both 7B runs
 started cleanly (the 7B's 14.29 GiB of weights loaded alongside the ~6 GiB resident base model on the
 40 GiB card) and completed in ~8 min each for ~$0.6 total GPU (well under budget).
 

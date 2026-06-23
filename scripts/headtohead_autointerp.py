@@ -96,7 +96,7 @@ def main() -> None:
 
     print("=" * 78)
     print("SAE-vs-TRANSCODER AUTO-INTERP HEAD-TO-HEAD (unpaired diff-of-means bootstrap,")
-    print(f"seed={SEED}, n_boot={N_BOOT}; per-latent arrays from delphi JSONs on microscope-artifacts)")
+    print(f"seed={SEED}, n_boot={N_BOOT}; arrays from delphi JSONs on microscope-artifacts)")
     print("=" * 78)
 
     results = []
