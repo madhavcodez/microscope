@@ -1,8 +1,11 @@
 # PROGRESS
 
 ## Current phase
-**PHASES 2-4 COMPLETE — PAUSED here per user (2026-06-22). Phase 5 (circuit) + Phase 6 (write-up) NOT started.**
-Spend ≈ $9-11 of $30.
+**PHASES 1-6 COMPLETE (2026-06-22). CORE PROJECT DONE:** reproduce -> train -> head-to-head -> controls
+-> circuit -> write-up. Spend ≈ $10-11 of $30. Two CONCLUSIVE scorer-independent results (randomized-model
+control + sparse feature circuit); the novel SAE-vs-transcoder head-to-head is INCONCLUSIVE (honest,
+scorer/budget-limited). Repo clean: ruff + 170 tests pass, pip install -e . + CLI work. REPORT.md is the
+finding (Phases 1-5 + abstract); README refreshed.
 
 - **Phase 2 DONE:** sparsify wrapper (SAE=transcode/skip F/F, transcoder T/T, shared width/k) + Pythia smokes
   + both Gemma-2-2B custom coders trained @ L12 (width 16384, k=64, ~10M tokens, bf16): train-g2-sae,
@@ -22,13 +25,21 @@ Spend ≈ $9-11 of $30.
   - Control B steering (SAE-feat vs difference_of_means): ran end-to-end but INCONCLUSIVE — baseline already
     0.81 (ceiling) + no coef beat baseline within fluency cap => SAE-dom diff 0.0 CI [-0.25,+0.25]. Consistent
     w/ AxBench. Follow-up: calibrated baseline + finer sweep.
-- New infra fns: recon_eval, auto_interp_custom, probe_coder_fvu, probe_saebench_adapter, probing_eval,
-  steer_eval, train --randomize. ADR-0005 added. All logged in EXPERIMENTS.md; REPORT.md has Phase 2-4 sections.
+- **Phase 5 DONE (circuit = CONCLUSIVE, novel; ADR-0006):** single-layer L12 SAE-feature circuit for the
+  bias_in_bios profession behavior. Probe-independent attribution (class-mean act diff) -> top-K; faithfulness
+  vs random-K control. top-5 features = 0.878 (94% of 0.933 full-dict ceiling) vs random-5 0.583, gap +0.294
+  CI[0.206,0.383]; top-10 = 0.906 (97%); ALL K beat random (CI excl 0). Circuit ids [3955,1649,1962,5409,...].
+  Caveat: same token-influenced behavior as Control A. (circuit-g2-sae)
+- **Phase 6 DONE (write-up):** REPORT.md = full finding (abstract + Phases 1-5 + honest-scope table); README
+  refreshed (status, results table, Modal reproduce commands, $30 cap). Repo verified clean+installable.
+- Infra fns: recon_eval, auto_interp_custom, probe_coder_fvu, probe_saebench_adapter, probing_eval,
+  steer_eval, circuit_eval, train --randomize. ADRs 0005 (controls) + 0006 (circuit) added.
 
-## Possible follow-ups (NOT started — for a later prompt)
-- Phase 5: one feature circuit (sparse-feature-circuits). Phase 6: full write-up.
-- Calibrated Control-B steering sweep; sparsify->sae_lens adapter for full SAEBench on custom coders;
-  stronger auto-interp scorer (the near-chance bottleneck throughout).
+## Possible follow-ups (NOT started — optional, beyond core scope)
+- Calibrated Control-B steering sweep (lower-baseline prompt + finer coefficients).
+- sparsify->sae_lens adapter for the full SAEBench suite on the custom coders (Phase-3 SAEBench was SAE-only).
+- Stronger auto-interp scorer (the near-chance bottleneck throughout).
+- Multi-layer (cross-component) circuit via sparse-feature-circuits.
 
 ## Phase 3 pre-registration (R3 — COMMITTED 2026-06-22 BEFORE any eval run; do not change post-hoc)
 - **Coders compared:** train-g2-sae vs train-g2-tc (Gemma-2-2B L12, width 16384, k=64, identical recipe).
