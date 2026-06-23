@@ -2369,3 +2369,288 @@ def probe_saebench_datasets() -> dict:
     for k, v in out.items():
         print(f"=== {k} ===\n{v}\n")
     return out
+
+
+@app.function(
+    image=base_image, gpu="L4", secrets=[HF_SECRET], volumes=CACHE, timeout=1200, retries=0
+)
+def probe_gemma_scope_multilayer(width: str = "16k") -> dict:
+    """E4 pre-flight for ADR-0008 (cheap, ~2-3 min L4): confirm the Gemma Scope SAEs load at each of
+    layers 5/12/19 (width 16k, canonical) and that `SAE.encode` returns a DENSE (n_tokens, d_sae)
+    tensor (NOT the sparsify TopK (top_acts, top_indices) tuple) on TransformerLens resid_post -- so the
+    multi-layer circuit can mean-pool dense feature vectors directly. Verifies d_sae per layer and the
+    BOS-excluded shape. This is the API the real fn relies on; we check it before any paid eval run."""
+    import os
+
+    import torch
+    from sae_lens import SAE
+    from transformer_lens import HookedTransformer
+
+    os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    dev = "cuda"
+    layers = (5, 12, 19)
+    out: dict = {"width": width, "layers": list(layers), "per_layer": {}}
+    model = HookedTransformer.from_pretrained("gemma-2-2b", dtype="bfloat16").to(dev)
+    sample = "She is a registered nurse who works at the county hospital."
+    toks = model.to_tokens(sample)  # prepends BOS
+    for layer in layers:
+        hook = f"blocks.{layer}.hook_resid_post"
+        loaded = SAE.from_pretrained(
+            "gemma-scope-2b-pt-res-canonical", f"layer_{layer}/width_{width}/canonical",
+            device=dev, dtype="bfloat16",
+        )
+        sae = loaded[0] if isinstance(loaded, tuple) else loaded
+        with torch.no_grad():
+            _, cache = model.run_with_cache(
+                toks, names_filter=hook, stop_at_layer=layer + 1, return_type=None
+            )
+            x = cache[hook][0, 1:].to(torch.bfloat16)  # drop BOS; [seq-1, d_model]
+            enc = sae.encode(x)
+        info = {
+            "hook": hook,
+            "d_sae_cfg": int(getattr(sae.cfg, "d_sae", -1)),
+            "x_shape": list(x.shape),
+            "encode_type": type(enc).__name__,
+            "encode_is_tensor": bool(torch.is_tensor(enc)),
+            "encode_shape": list(enc.shape) if torch.is_tensor(enc) else "NOT-A-TENSOR",
+            "encode_is_dense_n_by_dsae": bool(
+                torch.is_tensor(enc) and enc.ndim == 2 and enc.shape[0] == x.shape[0]
+            ),
+            "mean_active_per_token": (
+                round(float((enc > 0).float().sum(-1).mean()), 1) if torch.is_tensor(enc) else None
+            ),
+        }
+        out["per_layer"][str(layer)] = info
+        print(f"L{layer}: {info}")
+    return out
+
+
+@app.function(
+    # pkg_image (not base_image): needs BOTH transformer_lens (in base) AND sklearn (pulled into the
+    # full interp image, as circuit_eval/probing_eval rely on). base_image lacks sklearn.
+    image=pkg_image, gpu="L4", secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=3600, retries=0,
+)
+def multilayer_circuit_eval(
+    width: str = "16k",
+    n_per_class: int = 300,
+    seq_len: int = 64,
+    seed: int = 0,
+) -> dict:
+    """Phase-5 multi-layer extension (ADR-0008): a CROSS-LAYER SAE-feature-SET circuit for the
+    bias-in-bios profession behavior, using the PRETRAINED Gemma Scope SAEs at layers 5, 12, 19.
+
+    Recipe (Phase-1 reproduce_recon, reused verbatim because Gemma Scope SAEs are trained on it):
+    TransformerLens HookedTransformer resid_post @ each layer, BOS position dropped, sae.encode ->
+    DENSE feature acts, mean-pooled per example. (raw HF acts give VE -4.5 for Gemma Scope, ADR-0003.)
+
+    Method (pre-registered ADR-0008):
+      * Per layer L in {5,12,19}: attribution = |mean_act(class1) - mean_act(class0)| (probe-INDEPENDENT),
+        take top-K_per_layer features.
+      * Circuit = UNION of the per-layer top-K (a small cross-layer node set); its feature matrix =
+        the selected columns CONCATENATED across layers.
+      * Faithfulness: a FRESH logistic probe on ONLY the circuit features vs a SAME-SIZE RANDOM
+        cross-layer feature set (mandatory control, R2/R3) vs the full-feature ceiling (all features of
+        all three layers). Bootstrap 95% CI on the (circuit - random) gap; faithful iff CI excludes 0.
+      * Cross-layer BUILD-UP curve: probe accuracy for cumulative circuits L5-only, L5+L12, L5+L12+L19
+        (circuit features only) -- does the concept accumulate with depth? (descriptive, no causal claim.)
+
+    This is a cross-layer feature-SET circuit + build-up, NOT a feature->feature causal edge graph (R4).
+    Same token-influence caveat as Control A. Seeds set+logged (E1)."""
+    import os
+    from collections import Counter
+
+    import numpy as np
+    import torch
+    from datasets import load_dataset
+    from sae_lens import SAE
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import train_test_split
+    from transformer_lens import HookedTransformer
+
+    # E1 determinism: set + log all seeds.
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    dev = "cuda"
+    circuit_layers = [5, 12, 19]
+
+    # --- load TransformerLens Gemma-2-2B once + the Gemma Scope SAE for each circuit layer ---
+    model = HookedTransformer.from_pretrained("gemma-2-2b", dtype="bfloat16").to(dev)
+    saes: dict[int, object] = {}
+    d_sae_per_layer: dict[int, int] = {}
+    for layer in circuit_layers:
+        loaded = SAE.from_pretrained(
+            "gemma-scope-2b-pt-res-canonical", f"layer_{layer}/width_{width}/canonical",
+            device=dev, dtype="bfloat16",
+        )
+        sae = loaded[0] if isinstance(loaded, tuple) else loaded
+        saes[layer] = sae
+        d_sae_per_layer[layer] = int(getattr(sae.cfg, "d_sae", 0))
+
+    # --- labeled data: the two most-frequent professions (SAME contrast as ADR-0006 / Control A) ---
+    ds = load_dataset("LabHC/bias_in_bios", split="train")
+    top2 = [c for c, _ in Counter(ds["profession"]).most_common(2)]
+    buf = {c: [] for c in top2}
+    texts: list[str] = []
+    y: list[int] = []
+    for tx, lb in zip(ds["hard_text"], ds["profession"], strict=False):
+        if lb in buf and len(buf[lb]) < n_per_class and tx and tx.strip():
+            buf[lb].append(1)
+            texts.append(tx)
+            y.append(0 if lb == top2[0] else 1)
+    y = np.array(y)
+
+    # --- per-layer dense feature matrices (mean-pooled per example, BOS excluded) ---
+    # One forward pass per example, caching all three hooks at once (stop after the deepest layer).
+    hooks = {layer: f"blocks.{layer}.hook_resid_post" for layer in circuit_layers}
+    max_layer = max(circuit_layers)
+    feats_by_layer: dict[int, list] = {layer: [] for layer in circuit_layers}
+    with torch.no_grad():
+        for tx in texts:
+            toks = model.to_tokens(tx)[:, :seq_len]  # prepends BOS
+            _, cache = model.run_with_cache(
+                toks, names_filter=list(hooks.values()),
+                stop_at_layer=max_layer + 1, return_type=None,
+            )
+            for layer in circuit_layers:
+                x = cache[hooks[layer]][0, 1:].to(torch.bfloat16)  # drop BOS
+                enc = saes[layer].encode(x)  # dense (seq-1, d_sae) -- verified E4
+                feats_by_layer[layer].append(enc.float().mean(0).cpu().numpy())
+    X_by_layer = {layer: np.asarray(feats_by_layer[layer]) for layer in circuit_layers}
+    # global column layout: features are concatenated in circuit_layers order
+    layer_offsets: dict[int, int] = {}
+    off = 0
+    for layer in circuit_layers:
+        layer_offsets[layer] = off
+        off += d_sae_per_layer[layer]
+    d_total = off
+    X_all = np.concatenate([X_by_layer[layer] for layer in circuit_layers], axis=1)  # (n, d_total)
+
+    # --- per-layer probe-independent attribution + top-K_per_layer feature ids (global indices) ---
+    attribution: dict[int, np.ndarray] = {}
+    for layer in circuit_layers:
+        Xl = X_by_layer[layer]
+        attribution[layer] = np.abs(Xl[y == 1].mean(0) - Xl[y == 0].mean(0))
+
+    # single fixed split shared by every probe (paired comparison; E1)
+    idx = np.arange(len(y))
+    tr_idx, te_idx = train_test_split(idx, test_size=0.3, random_state=seed, stratify=y)
+    ytr, yte = y[tr_idx], y[te_idx]
+
+    def probe_correct(cols: np.ndarray) -> np.ndarray:
+        """Fresh logistic probe on the given GLOBAL feature columns; per-example correctness on test."""
+        clf = LogisticRegression(max_iter=2000, C=0.5).fit(X_all[np.ix_(tr_idx, cols)], ytr)
+        return (clf.predict(X_all[np.ix_(te_idx, cols)]) == yte).astype(float)
+
+    full_correct = probe_correct(np.arange(d_total))
+    ceiling = float(full_correct.mean())
+
+    rng = np.random.default_rng(seed)
+    n_te = len(yte)
+
+    def boot_gap_ci(circuit_corr: np.ndarray, random_corr: np.ndarray) -> list[float]:
+        """Bootstrap 95% CI on the (circuit - random) accuracy gap over resampled test examples."""
+        boot = np.array([
+            circuit_corr[i].mean() - random_corr[j].mean()
+            for i, j in (
+                (rng.integers(0, n_te, n_te), rng.integers(0, n_te, n_te)) for _ in range(5000)
+            )
+        ])
+        lo, hi = np.percentile(boot, [2.5, 97.5])
+        return [round(float(lo), 4), round(float(hi), 4)]
+
+    # --- circuit = UNION of per-layer top-K, for several K_per_layer; faithfulness vs random + ceiling ---
+    per_k = []
+    top_feature_ids: dict[str, dict[str, list]] = {}
+    for k_per_layer in (3, 5, 10):
+        circuit_cols: list[int] = []
+        ids_this_k: dict[str, list] = {}
+        for layer in circuit_layers:
+            local_top = np.argsort(-attribution[layer])[:k_per_layer]
+            ids_this_k[str(layer)] = [int(i) for i in local_top]
+            circuit_cols.extend(int(layer_offsets[layer] + i) for i in local_top)
+        circuit_cols_arr = np.array(sorted(set(circuit_cols)))
+        size = len(circuit_cols_arr)
+        # mandatory control: same-size RANDOM cross-layer feature set (drawn across all 3 layers' dicts)
+        random_cols = rng.choice(d_total, size, replace=False)
+        cc = probe_correct(circuit_cols_arr)
+        rc = probe_correct(random_cols)
+        ci = boot_gap_ci(cc, rc)
+        per_k.append({
+            "k_per_layer": k_per_layer,
+            "circuit_size": int(size),
+            "acc_circuit": round(float(cc.mean()), 4),
+            "acc_random": round(float(rc.mean()), 4),
+            "faithfulness_vs_ceiling": round(float(cc.mean() / ceiling), 3),
+            "gap_circuit_minus_random": round(float(cc.mean() - rc.mean()), 4),
+            "gap_ci95": ci,
+            "circuit_beats_random": bool(ci[0] > 0),
+        })
+        top_feature_ids[f"k_per_layer={k_per_layer}"] = ids_this_k
+        print(f"K/layer={k_per_layer} size={size}: circuit={cc.mean():.4f} random={rc.mean():.4f} "
+              f"ceiling={ceiling:.4f} gap_ci={ci}")
+
+    # --- cross-layer BUILD-UP curve at a fixed K_per_layer: L5, L5+L12, L5+L12+L19 (circuit feats) ---
+    buildup_k = 5
+    buildup = []
+    cumulative_cols: list[int] = []
+    cumulative_names: list[int] = []
+    for layer in circuit_layers:
+        local_top = np.argsort(-attribution[layer])[:buildup_k]
+        cumulative_cols.extend(int(layer_offsets[layer] + i) for i in local_top)
+        cumulative_names.append(layer)
+        cols = np.array(sorted(set(cumulative_cols)))
+        acc = float(probe_correct(cols).mean())
+        buildup.append({
+            "layers": list(cumulative_names),
+            "n_features": int(len(cols)),
+            "acc": round(acc, 4),
+            "faithfulness_vs_ceiling": round(acc / ceiling, 3),
+        })
+        print(f"BUILD-UP {cumulative_names} ({len(cols)} feats): acc={acc:.4f}")
+
+    out = {
+        "behavior": f"bias_in_bios professions {top2}",
+        "circuit_layers": circuit_layers,
+        "sae_release": "gemma-scope-2b-pt-res-canonical",
+        "width": width,
+        "d_sae_per_layer": {str(k): v for k, v in d_sae_per_layer.items()},
+        "d_total": int(d_total),
+        "n_examples": int(len(y)),
+        "seed": seed,
+        "ceiling_acc_full": round(ceiling, 4),
+        "by_k_per_layer": per_k,
+        "buildup_k_per_layer": buildup_k,
+        "buildup_curve": buildup,
+        "circuit_feature_ids": top_feature_ids,
+        "scope_note": (
+            "cross-layer feature-SET circuit + depth build-up, NOT a feature->feature causal edge "
+            "graph (ADR-0008, R4); same token-influence caveat as Control A."
+        ),
+    }
+    import json as _json
+
+    with open("/root/outputs/circuit_multilayer.json", "w") as fh:
+        _json.dump(out, fh)
+    artifacts_vol.commit()
+    print("MULTILAYER CIRCUIT RESULT:",
+          {k: v for k, v in out.items() if k not in ("circuit_feature_ids",)})
+    return out
+
+
+@app.local_entrypoint()
+def multilayer_circuit_main(
+    width: str = "16k", n_per_class: int = 300, seq_len: int = 64, seed: int = 0
+) -> None:
+    """Run the ADR-0008 multi-layer (cross-layer feature-set) circuit eval on Modal L4:
+
+    modal run infra/modal_app.py::multilayer_circuit_main
+    """
+    result = multilayer_circuit_eval.remote(
+        width=width, n_per_class=n_per_class, seq_len=seq_len, seed=seed
+    )
+    print("FINAL MULTILAYER CIRCUIT RESULT:",
+          {k: v for k, v in result.items() if k not in ("circuit_feature_ids",)})

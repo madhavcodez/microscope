@@ -2,13 +2,17 @@
 
 ## Current phase
 **PHASES 1-6 COMPLETE (2026-06-22); Control-B steering recalibrated + 7B scorer head-to-head RESOLVED 2026-06-23;
-SAEBench-custom-SAE adapter b_dec bug FIXED + re-run (encode-verified) 2026-06-23.**
-CORE PROJECT DONE: reproduce -> train -> head-to-head -> controls -> circuit -> write-up. Spend ≈ $11.8 of $30
-(7B A100 unit ≈ $0.6; adapter-fix verify+eval ≈ $0.2). THREE conclusive results now: two scorer-independent (randomized-model control +
-sparse feature circuit) PLUS the novel SAE-vs-transcoder head-to-head, which RESOLVED once a strong-enough
+SAEBench-custom-SAE adapter b_dec bug FIXED + re-run (encode-verified) 2026-06-23; MULTI-LAYER circuit follow-up DONE 2026-06-23.**
+CORE PROJECT DONE: reproduce -> train -> head-to-head -> controls -> circuit -> write-up. Spend ≈ $12.2 of $30
+(7B A100 unit ≈ $0.6; adapter-fix verify+eval ≈ $0.2; multi-layer circuit ≈ $0.35). FOUR conclusive results now: THREE scorer-independent
+(randomized-model control + single-layer sparse feature circuit + multi-layer cross-layer feature-set circuit)
+PLUS the novel SAE-vs-transcoder head-to-head, which RESOLVED once a strong-enough
 scorer was used — inconclusive at the 3B scorer (both CIs incl 0) but the **skip-transcoder WINS at the 7B
 scorer** on both detection (Δ+0.053 CI[+0.016,+0.089]) and fuzzing (Δ+0.059 CI[+0.019,+0.097]); the
-recurring near-chance was a SCORER artifact (3B), not a coder limit (ai-g2-sae-7b/tc-7b). Repo clean: ruff
+recurring near-chance was a SCORER artifact (3B), not a coder limit (ai-g2-sae-7b/tc-7b). Multi-layer circuit
+(circuit-multilayer, ADR-0008): ≈9 Gemma Scope features over L5/12/19 recover 97% of the 0.944 ceiling and beat
+a random cross-layer control at every K (CI excl 0); concept accumulates by mid-depth (L5->L12, L19 adds +0.000);
+scoped honestly as a feature-SET circuit + build-up, NOT a causal edge graph. Repo clean: ruff
 + 170 tests pass, pip install -e . + CLI work. REPORT.md is the finding (Phases 1-5 + abstract); README refreshed.
 
 - **Phase 2 DONE:** sparsify wrapper (SAE=transcode/skip F/F, transcoder T/T, shared width/k) + Pythia smokes
@@ -69,7 +73,21 @@ recurring near-chance was a SCORER artifact (3B), not a coder limit (ai-g2-sae-7
   same unpaired diff-of-means bootstrap seed0/10k as ai-g2). Confirms the pre-registered "transcoders beat
   SAEs" direction on the interpretability axis (full Pareto-dominance still open — TC reconstruction not
   isolable). Recompute: scripts/headtohead_autointerp.py.
-- Multi-layer (cross-component) circuit via sparse-feature-circuits.
+- ~~Multi-layer (cross-component) circuit via sparse-feature-circuits.~~ DONE 2026-06-23
+  (circuit-multilayer, ADR-0008) as a **cross-layer feature-SET circuit + depth build-up** (NOT the
+  heavier feature->feature causal edge graph, which stays the follow-up). Uses PRETRAINED Gemma Scope
+  SAEs at L5/12/19 (the layers reproduced in repro-002) on the TransformerLens resid_post recipe
+  (BOS excluded). Probe-independent attribution per layer -> union of per-layer top-K = circuit; fresh
+  probe on circuit features (concat across layers) vs same-size RANDOM cross-layer set vs full ceiling
+  (49152 feats), bootstrap CI on the gap (R2/R3). RESULT: a small cross-layer set is FAITHFUL and beats
+  random at every K (CI excl 0): K/layer=3 (9 nodes) circuit 0.917 (97% of 0.944 ceiling) vs random
+  0.594 gap +0.322 CI[0.239,0.406]; K/layer=5 (15) 0.939 (99%) vs 0.778 gap +0.161 CI[0.094,0.233];
+  K/layer=10 (30) 0.950 (101%) vs 0.667 gap +0.283 CI[0.206,0.356]. Build-up (K/layer=5): L5 0.911,
+  L5+L12 0.939, L5+L12+L19 0.939 => concept accumulates by mid-depth (L5->L12) and saturates (L19 adds
+  +0.000). Caveat: same token-influence as Control A. ~$0.35 GPU (1 E4 probe + 1 import-fail + 1 real
+  run, all L4, ~13 min). infra fn: multilayer_circuit_eval + multilayer_circuit_main entrypoint.
+- Feature->feature causal cross-layer EDGE graph (attribution patching / sparse-feature-circuits) — the
+  heavier version; this unit built the feature-set + build-up, not the edge graph (R4).
 
 ## Phase 3 pre-registration (R3 — COMMITTED 2026-06-22 BEFORE any eval run; do not change post-hoc)
 - **Coders compared:** train-g2-sae vs train-g2-tc (Gemma-2-2B L12, width 16384, k=64, identical recipe).
@@ -397,3 +415,45 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
     (encode_fidelity_PASS True) on the volume; (d) the False-variant contrast in the verify json FAILS
     (proves the check is real); (e) no fabricated numbers (R5). Re-run with seed 42 reproduces modulo GPU
     nondeterminism (E1).
+- 2026-06-23 (coder): Built the MULTI-LAYER circuit — the deferred extension of the single-layer
+  circuit-g2-sae (ADR-0008, NEW). Pre-registered the method in ADR-0008 BEFORE running (R3).
+  - SCOPE (R4, stated up front): a cross-layer feature-SET circuit + depth build-up, NOT a
+    feature->feature causal EDGE graph (the heavier attribution-patching / sparse-feature-circuits
+    version stays a follow-up). Same bias_in_bios prof 21v19 contrast as Phase 5 / Control A (continuity).
+  - E4 FIRST (probe_gemma_scope_multilayer, NEW, ~3 min L4): confirmed the PRETRAINED Gemma Scope SAEs
+    load at L5/12/19 (width_16k/canonical, d_sae=16384 each) AND that `sae_lens SAE.encode` returns a
+    DENSE (n_tokens, 16384) tensor (NOT the sparsify TopK tuple) on the TransformerLens resid_post recipe
+    (BOS excluded). This is why the fn uses the reproduce_recon recipe, NOT circuit_eval's sparsify path
+    (raw HF acts gave VE -4.5 for Gemma Scope, ADR-0003).
+  - CODE (infra/modal_app.py): `multilayer_circuit_eval` (image=pkg_image — needs BOTH transformer_lens
+    [in base] AND sklearn [in the full interp image; base lacks it — first run crashed at sklearn import,
+    fixed by switching base_image->pkg_image]) + `multilayer_circuit_main` local entrypoint. Per layer:
+    run_with_cache(resid_post, stop_at_layer=L+1), drop BOS, sae.encode (dense), mean-pool per example.
+    Attribution = |mean_act(c1)-mean_act(c0)| per layer (probe-independent); circuit = union of per-layer
+    top-K; faithfulness = fresh logistic probe on circuit cols (concat across layers) vs same-size RANDOM
+    cross-layer set vs full 49152-feat ceiling, bootstrap CI on the gap; single fixed split shared by all
+    probes (paired); build-up curve L5/L5+L12/L5+L12+L19. Seeds set+logged (E1, seed=0). py_compile OK;
+    ruff adds no NEW non-E501 issue on my lines (added strict=False to my one zip to avoid a B905).
+  - RAN (Modal L4, PYTHONUTF8=1, seed 0, ~13 min, ~$0.2; total unit ~$0.35 incl E4 probe + 1 import-fail,
+    under the $3 cap; 3 GPU iterations = probe + fail + real run, the budget-stated limit). RESULT (real,
+    R5): ceiling(49152)=0.9444; K/layer=3 (9 nodes) circuit=0.9167 (97.1%) vs random=0.5944 gap+0.322
+    CI[0.239,0.406]; K/layer=5 (15) 0.9389 (99.4%) vs 0.7778 gap+0.161 CI[0.094,0.233]; K/layer=10 (30)
+    0.9500 (100.6%) vs 0.6667 gap+0.283 CI[0.206,0.356]; ALL K beat random (CI excl 0). Build-up
+    (K/layer=5): L5=0.9111, L5+L12=0.9389, L5+L12+L19=0.9389. VERDICT (R4): sparse multi-layer
+    (cross-layer feature-set) circuit, faithful + beats the random cross-layer control (novel, with
+    control); concept accumulates by mid-depth (built L5->L12, L19 adds +0.000). Top features per layer
+    (K/layer=5): L5 [12872,5411,14908,28,807], L12 [6810,23,5364,1041,10603], L19 [4346,10992,12025,7663,14180].
+    result: /root/outputs/circuit_multilayer.json on the microscope-artifacts volume.
+  - DOCS: ADR-0008 (new), EXPERIMENTS.md (circuit-multilayer row), REPORT.md (Phase-5 multi-layer
+    subsection + scope-table row + summary sentence + status follow-up update), README (results row +
+    Phase-5 command), PROGRESS (this + follow-up marked done). COMMITTED on main.
+  - HANDOFF / tester: (a) py_compile infra/modal_app.py; the 2 new fns exist (multilayer_circuit_eval +
+    probe_gemma_scope_multilayer) + the multilayer_circuit_main entrypoint; (b) ruff adds no NEW non-E501
+    issue on my lines (>=~2376) vs baseline (114 E501 are pre-existing/not held to the src bar); 170 CPU
+    tests still pass (infra not imported by the package); (c) the numbers in EXPERIMENTS/REPORT/README/
+    ADR-0008 match circuit_multilayer.json on the volume (`modal volume get microscope-artifacts
+    circuit_multilayer.json <path>` — pull to a FILE, not '-': stdout '-' prepends Modal log lines and
+    corrupts the JSON) AND the FINAL MULTILAYER CIRCUIT RESULT stdout line; (d) the scope label is
+    'feature-SET circuit + build-up', NOT a causal edge graph (R4); (e) no fabricated numbers (R5). A
+    re-run with seed 0 reproduces modulo minor GPU nondeterminism (E1). NOTE: multilayer_circuit_eval uses
+    pkg_image (base_image lacks sklearn); probe_gemma_scope_multilayer uses base_image (only needs TL+sae_lens).

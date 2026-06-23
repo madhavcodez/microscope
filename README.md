@@ -31,6 +31,7 @@ project is **honest evaluation** — see [`docs/RULES.md`](docs/RULES.md).
 | Randomized-model control: real-model SAE > randomized-model SAE | **conclusive** (+0.072, CI [0.033, 0.117]) | `ctrl-probe-*` |
 | Steering: SAE feature vs difference-of-means | **inconclusive** (both steer; dom matches SAE, CI incl 0) | `ctrl-steer-v2` |
 | Feature circuit: 5–10 SAE features = 94–97% of full accuracy | **conclusive (novel)** | `circuit-g2-sae` |
+| Multi-layer (cross-layer) circuit: ≈9 features over L5/12/19 = 97% of full accuracy; concept accumulates by mid-depth | **conclusive (novel)** | `circuit-multilayer` |
 
 **Honest bottom line:** the novel transcoder-vs-SAE comparison was inconclusive under the weak 3B scorer,
 but a stronger **local** 7B scorer (on an A100-40GB) lifts every score above chance and resolves it — the
@@ -85,8 +86,10 @@ modal run infra/modal_app.py::probing_eval --run-name train_gemma2_2b_l12-sae   
 modal run infra/modal_app.py::probing_eval --run-name train_gemma2_2b_l12-sae-random --randomize  # control A (random)
 modal run infra/modal_app.py::steer_eval                      # control B (steering vs diff-of-means)
 
-# Phase 5 — feature circuit
+# Phase 5 — feature circuit (single-layer L12 custom SAE)
 modal run infra/modal_app.py::circuit_eval
+# Phase 5 — multi-layer (cross-layer) circuit: pretrained Gemma Scope SAEs at L5/12/19 (ADR-0008)
+modal run infra/modal_app.py::multilayer_circuit_main
 ```
 
 Run `PYTHONUTF8=1` on Windows. Each run logs a row to [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) with

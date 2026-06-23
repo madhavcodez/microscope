@@ -30,7 +30,10 @@ not a coder limit. Beyond that, the load-bearing value is in the **controls and 
 shows the real-model SAE carries **model-learned structure beyond token statistics** (probing 0.933 vs
 0.861 random, paired CI [+0.033, +0.117]) — significant but *modest*, because most of the probing signal
 is token-level; (2) a **sparse feature circuit** of just **5–10 SAE features recovers 94–97%** of the
-full-dictionary accuracy for a profession behavior and decisively beats a random-feature control. Honest
+full-dictionary accuracy for a profession behavior and decisively beats a random-feature control — and its
+**multi-layer extension** finds an equally sparse **cross-layer** circuit (≈9 Gemma Scope features over
+L5/L12/L19 = 97% of the ceiling, beating a random cross-layer control), with the concept accumulating by
+mid-depth. Honest
 bottom line: the splashy novel comparison didn't resolve under budget, but the methodology is sound and
 two scorer-independent results are **conclusive**. Every number traces to [EXPERIMENTS.md](EXPERIMENTS.md).
 
@@ -87,6 +90,7 @@ whether the interpretability is real.
 | Randomized-model control — real SAE has structure beyond token stats | **conclusive** | ctrl-probe-real/random (paired gap +0.072, CI [+0.033,+0.117]) |
 | Steering control (B): SAE feature vs difference-of-means | **inconclusive** | ctrl-steer-v2 (both steer well within fluency: SAE +0.312, dom +0.375; Δ −0.062, CI [−0.25,+0.125]) |
 | Feature circuit — sparse + faithful (5–10 SAE features) | **conclusive (novel)** | circuit-g2-sae (top-5 = 94% of ceiling; beats random, CI excl 0) |
+| Multi-layer (cross-layer feature-SET) circuit + depth build-up | **conclusive (novel)** | circuit-multilayer (9 features over L5/12/19 = 97% of ceiling; beats random cross-layer control at every K, CI excl 0; concept accumulates by mid-depth) |
 
 Phase 1 claimed nothing novel (reproduction only, R1). Phase 2 produces novel *artifacts* but still
 makes no interpretability claim — those wait for Phase 3's evaluation.
@@ -299,6 +303,49 @@ random-*model* SAE still probed 0.86), so the circuit partly captures token feat
 not purely abstract semantics. The precise claim: a sparse SAE-feature circuit faithfully mediates the
 L12 readout of this profession distinction.
 
+### Phase 5 (multi-layer extension) — a cross-layer feature-set circuit + depth build-up (ADR-0008)
+
+**A sparse multi-layer circuit, faithful and beating its control — CONCLUSIVE (novel).** The single-layer
+circuit above lives at L12 only. The deferred extension asks: do a *few features spread across depth*
+carry the same profession distinction? Because we have one custom SAE (L12), this uses the **pretrained
+Gemma Scope SAEs at layers 5, 12, 19** (the three layers reproduced in Phase 1), on the same
+TransformerLens `resid_post` recipe (BOS excluded). Method mirrors ADR-0006 per layer: probe-independent
+attribution (class-mean activation difference) → top-`K` features **per layer**; the **circuit = the union
+across layers** (a small cross-layer node set); faithfulness = a fresh probe on the circuit's features
+(concatenated across layers) vs a **same-size random cross-layer feature set** vs the full
+49,152-feature ceiling.
+
+| K per layer | circuit size | circuit acc | random (control) | faithfulness (vs 0.944 ceiling) | gap, 95% CI |
+|---|---|---|---|---|---|
+| 3  | 9  | 0.917 | 0.594 | 0.97 | +0.322 [0.239, 0.406] |
+| 5  | 15 | 0.939 | 0.778 | 0.99 | +0.161 [0.094, 0.233] |
+| 10 | 30 | 0.950 | 0.667 | 1.01 | +0.283 [0.206, 0.356] |
+
+**As few as 9 features spread over 3 layers recover 97% of the full 49,152-feature accuracy** (15 → 99%),
+and every K beats the random cross-layer control with a bootstrap CI excluding zero. The profession
+distinction is carried by a **small, identifiable cross-layer circuit**, not smeared across three full
+dictionaries.
+
+**Cross-layer build-up (does the concept accumulate with depth?).** Using K=5 per layer and adding layers
+cumulatively (circuit features only):
+
+| layers | features | probe acc |
+|---|---|---|
+| L5 | 5 | 0.911 |
+| L5 + L12 | 10 | 0.939 |
+| L5 + L12 + L19 | 15 | 0.939 |
+
+The concept is **largely present by layer 5, sharpened by layer 12, and saturates** — L19 adds nothing on
+top (+0.000). So this profession signal **accumulates by mid-depth rather than building monotonically all
+the way to late layers**. (This curve is descriptive — which layers carry the signal — not a causal claim.)
+
+**Scope (honest, R4).** This is a **cross-layer feature-SET circuit + a depth build-up curve**, *not* a
+full feature→feature causal **edge** graph: we do not compute or intervene on cross-layer edges
+(attribution patching / the sparse-feature-circuits construction), which remains the heavier follow-up.
+And it is the **same token-influenced behavior** as Control A, so the circuit partly reflects token
+features (profession words). The precise claim: a small set of Gemma Scope SAE features spanning L5/L12/L19
+faithfully mediates the readout of this profession distinction, and the signal accumulates by mid-depth.
+
 ## Status — Phases 1–5 done (Phase 6 = this report); PAUSED for follow-ups
 
 Phases 1–5 are complete; Phase 6 (this write-up) consolidates them. The Control-B steering sweep was
@@ -306,8 +353,13 @@ recalibrated (`ctrl-steer-v2`) into a discriminating, honestly-inconclusive resu
 Phase-3 SAEBench-on-custom-SAE item is now **closed**: a `sparsify→sae_lens.TopKSAE` adapter (ADR-0007),
 with an encode-fidelity check that proves it reproduces sparsify's `coder.encode` exactly, ran the full
 sparse_probing eval on the custom SAE (`sae_top_1` 0.670 — below Gemma Scope's 0.767 and below its own
-residual baseline 0.688, the expected consequence of the budget training; transcoder N/A per R3). **Remaining possible follow-ups** (not done): scaling SAEBench to the full 8-dataset suite, and a
-multi-layer (cross-component) circuit. Open questions/risks: PHASE1_RETROSPECTIVE.md.
+residual baseline 0.688, the expected consequence of the budget training; transcoder N/A per R3). The
+**multi-layer circuit** follow-up is now also done as a **cross-layer feature-set circuit + depth build-up**
+(`circuit-multilayer`, ADR-0008: 9 Gemma Scope features over L5/12/19 recover 97% of the ceiling and beat a
+random cross-layer control at every size; the profession concept accumulates by mid-depth). **Remaining
+possible follow-ups** (not done): scaling SAEBench to the full 8-dataset suite, and the heavier
+feature→feature causal **edge** graph (attribution patching / sparse-feature-circuits) — this unit built
+the feature-set + build-up version, not the causal edge graph. Open questions/risks: PHASE1_RETROSPECTIVE.md.
 
 ## Reproducibility & cost
 
