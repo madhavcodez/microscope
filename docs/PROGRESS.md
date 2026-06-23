@@ -1,8 +1,8 @@
 # PROGRESS
 
 ## Current phase
-**PHASES 1-6 COMPLETE (2026-06-22). CORE PROJECT DONE:** reproduce -> train -> head-to-head -> controls
--> circuit -> write-up. Spend ≈ $10-11 of $30. Two CONCLUSIVE scorer-independent results (randomized-model
+**PHASES 1-6 COMPLETE (2026-06-22); Control-B steering recalibrated 2026-06-23.** CORE PROJECT DONE:
+reproduce -> train -> head-to-head -> controls -> circuit -> write-up. Spend ≈ $11 of $30. Two CONCLUSIVE scorer-independent results (randomized-model
 control + sparse feature circuit); the novel SAE-vs-transcoder head-to-head is INCONCLUSIVE (honest,
 scorer/budget-limited). Repo clean: ruff + 170 tests pass, pip install -e . + CLI work. REPORT.md is the
 finding (Phases 1-5 + abstract); README refreshed.
@@ -22,9 +22,13 @@ finding (Phases 1-5 + abstract); README refreshed.
     [+0.033,+0.117] EXCLUDES 0 => real SAE has model-learned structure beyond token stats. Honest nuance: random
     already 0.861 => most probing signal is TOKEN-level (preserved embeddings); learned adds modest +7pts.
     SECONDARY auto-interp gap = N/A (delphi can't score degenerate random-SAE features).
-  - Control B steering (SAE-feat vs difference_of_means): ran end-to-end but INCONCLUSIVE — baseline already
-    0.81 (ceiling) + no coef beat baseline within fluency cap => SAE-dom diff 0.0 CI [-0.25,+0.25]. Consistent
-    w/ AxBench. Follow-up: calibrated baseline + finer sweep.
+  - Control B steering (SAE-feat vs difference_of_means): RECALIBRATED 2026-06-23 (ctrl-steer-v2), now
+    DISCRIMINATING + honestly INCONCLUSIVE. v1 (ctrl-steer) was degenerate: "My favorite" baseline 0.81
+    (ceiling) + coarse coefs [2,4,8] all broke fluency => diff 0.0. v2 = CALIBRATION fix only (same ADR-0005
+    metric/concept, NOT a new Gate-4): scan 6 prompts -> neutral 'This person' (baseline 0.562); finer grid
+    [0.5,1,2,3,4]. Both directions steer well within fluency at coef 0.5: SAE success 0.875 (effect +0.312),
+    dom 0.938 (effect +0.375); coefs>=1-2 break fluency (ppl 16->2268). SAE-dom=-0.062 CI95[-0.25,+0.125]
+    (incl 0) => dom matches/slightly beats SAE = AxBench expectation, stated plainly (R4).
 - **Phase 5 DONE (circuit = CONCLUSIVE, novel; ADR-0006):** single-layer L12 SAE-feature circuit for the
   bias_in_bios profession behavior. Probe-independent attribution (class-mean act diff) -> top-K; faithfulness
   vs random-K control. top-5 features = 0.878 (94% of 0.933 full-dict ceiling) vs random-5 0.583, gap +0.294
@@ -36,7 +40,8 @@ finding (Phases 1-5 + abstract); README refreshed.
   steer_eval, circuit_eval, train --randomize. ADRs 0005 (controls) + 0006 (circuit) added.
 
 ## Possible follow-ups (NOT started — optional, beyond core scope)
-- Calibrated Control-B steering sweep (lower-baseline prompt + finer coefficients).
+- ~~Calibrated Control-B steering sweep~~ DONE 2026-06-23 (ctrl-steer-v2): neutral prompt + finer grid =>
+  discriminating, honestly-inconclusive (dom matches/slightly beats SAE, CI incl 0).
 - sparsify->sae_lens adapter for the full SAEBench suite on the custom coders (Phase-3 SAEBench was SAE-only).
 - Stronger auto-interp scorer (the near-chance bottleneck throughout).
 - Multi-layer (cross-component) circuit via sparse-feature-circuits.
@@ -204,3 +209,31 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
     train invocations at the NEW train_pythia70m_smoke.yaml (has width+k) so they pass validation and
     reach the exit-2 GPU gate, OR assert the new validation behaviour. The R1 exit-3 tests
     (gate-shut) are unaffected and still pass (R1 fires before train_coder).
+- 2026-06-23 (coder): RECALIBRATED Control-B steering (`steer_eval` in infra/modal_app.py) so it
+  discriminates instead of returning the degenerate baseline-ceiling result. CALIBRATION FIX ONLY —
+  same ADR-0005 pre-registered metric (success-rate-under-fluency) + concept (bias_in_bios prof 21 vs
+  19, steer->19), so NOT a new Gate-4 decision (stated in docstring + EXPERIMENTS notes).
+  - steer_eval edited in place: (1) NEUTRAL-prompt scan over 6 candidates ["I","The","This person",
+    "They said","Yesterday","My favorite"], prints each one's unsteered baseline success, picks the
+    one closest to 0.5 (new `n_scan=8` param keeps the scan cheap; chosen prompt's baseline is
+    re-measured at full n_gen). (2) FINER grid coefs=[0.5,1,2,3,4]xresid_rms (was [2,4,8]). (3) Reports
+    success AND ppl at EVERY coef for BOTH directions (full sweep incl coef0), each direction's best
+    FLUENCY-PRESERVING coef, the steering EFFECT (success-baseline), and bootstrap CI95 on SAE-minus-dom
+    with an explicit R4 honest verdict. E1: logs+sets seed (np/torch/cuda) — `seed` param, default 0.
+  - RAN on Modal L4 (PYTHONUTF8=1, ~30 min, ~$0.45, 1 GPU run, exit 0). RESULT (ctrl-steer-v2):
+    chosen prompt 'This person' baseline_success=0.562 (vs 'My favorite'/'I' = 1.0 ceilings), ppl 9.18,
+    fluency cap 13.76. SAE feature best=coef0.5 success 0.875 (effect +0.312); dom best=coef0.5 success
+    0.938 (effect +0.375); coefs>=1-2 break fluency (ppl 16.6->2268). SAE-dom=-0.062 CI95[-0.25,+0.125]
+    (incl 0) => INCONCLUSIVE but now meaningful: both steer with real headroom; dom matches/slightly
+    beats SAE = the AxBench expectation, stated plainly (R4). top_feature=795, resid_rms=104.4.
+  - Checks: py_compile OK; ruff on my edited range adds only E501 (file already has 89 pre-existing
+    E501 + B905/E702/E731/F401 in unmodified code; infra/modal_app.py is not held to the src/ lint
+    bar). No new callers/tests reference steer_eval's signature. Updated EXPERIMENTS.md (annotated old
+    ctrl-steer as SUPERSEDED + added ctrl-steer-v2 row), REPORT.md (Control B section + summary table),
+    README (steering row), PROGRESS.md. COMMITTED on main.
+  - HANDOFF / tester: this is a Modal-GPU control fn (not CPU-unit-testable end-to-end). Verify
+    (a) py_compile/import of infra/modal_app.py; (b) the numbers in the docs match output line 54-55 of
+    the run (STEER RESULT + BY DIR) and /root/outputs/steering.json on the artifacts volume; (c) the
+    metric/concept are unchanged vs ADR-0005 (only prompt + coef grid + reporting changed); (d) the CI
+    [-0.25,+0.125] includes 0 => 'inconclusive' label is correct (R4). A re-run with the same seed
+    should reproduce (E1), modulo any nondeterminism in CUDA sampling.

@@ -1321,12 +1321,33 @@ def probing_eval(run_name: str, randomize: bool = False, layer: int = 12,
     image=pkg_image, gpu="L4", secrets=[HF_SECRET],
     volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=2400, retries=0,
 )
-def steer_eval(layer: int = 12, n_per_class: int = 200, n_gen: int = 16, max_new: int = 32) -> dict:
-    """Control B (ADR-0005): SAE-feature steering vs difference-of-means, on a profession concept.
+def steer_eval(
+    layer: int = 12,
+    n_per_class: int = 200,
+    n_gen: int = 16,
+    n_scan: int = 8,
+    max_new: int = 32,
+    seed: int = 0,
+) -> dict:
+    """Control B (ADR-0005), RECALIBRATED: SAE-feature steering vs difference-of-means.
 
-    Metric: fraction of generations the concept probe labels as the target class, at the strongest
-    steering coefficient that keeps mean perplexity <= 1.5x the unsteered baseline (fluency bound).
-    Head-to-head SAE-feature vs diff-of-means with a bootstrap CI on the success-rate difference."""
+    Same pre-registered metric/concept as ADR-0005 (success-rate-under-fluency on the two most-frequent
+    bias_in_bios professions, steering toward class top2[1]); this is a CALIBRATION fix only (neutral
+    prompt + finer coefficient grid + full per-coef reporting), NOT a metric/concept change, so it is
+    not a new Gate-4 decision.
+
+    The first run (ctrl-steer) was degenerate: the "My favorite" prompt already classified as the target
+    ~0.81 of the time (a ceiling, no headroom) and the coarse coefs [2,4,8]xresid_rms all broke the
+    fluency cap, so the best fluency-preserving coef was 0 for both directions and the head-to-head was
+    trivially 0.0. Here we (1) choose the prompt whose baseline success is closest to ~0.5 from a neutral
+    candidate set, (2) sweep a finer/smaller grid so a fluency-preserving sweet spot can exist, and
+    (3) report success AND perplexity at every coef for both directions plus the steering EFFECT
+    (success minus baseline) with a bootstrap CI on the SAE-minus-dom difference.
+
+    Metric (unchanged): fraction of generations the concept probe labels as the target class, at the
+    strongest steering coefficient that keeps mean perplexity <= 1.5x the unsteered baseline (fluency
+    bound). Head-to-head SAE-feature vs diff-of-means with a bootstrap CI on the success-rate difference.
+    """
     import os
 
     import numpy as np
@@ -1335,6 +1356,11 @@ def steer_eval(layer: int = 12, n_per_class: int = 200, n_gen: int = 16, max_new
     from datasets import load_dataset
     from sklearn.linear_model import LogisticRegression
     from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    # E1 determinism: log + set all seeds (generation uses do_sample=True, so this fixes the sample).
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     dev = "cuda"
@@ -1393,21 +1419,18 @@ def steer_eval(layer: int = 12, n_per_class: int = 200, n_gen: int = 16, max_new
     dom = dom / dom.norm()
     resid_rms = float(np.linalg.norm(raws, axis=1).mean())
 
-    prompt_ids = tok("My favorite", return_tensors="pt").input_ids.to(dev)
-
-    def gen_with(direction, coef):
+    def gen_with(prompt_ids, direction, coef, n=None):
+        """Generate n continuations of prompt_ids, optionally steered by coef*resid_rms*direction."""
+        n = n_gen if n is None else n
         vec = (coef * resid_rms) * direction.to(torch.bfloat16)
         def hook(m, i, o):
             if isinstance(o, tuple):
                 return (o[0] + vec, *o[1:])
             return o + vec
         outs = []
-        if coef == 0:
-            handle = None
-        else:
-            handle = layers[layer].register_forward_hook(hook)
+        handle = None if coef == 0 else layers[layer].register_forward_hook(hook)
         try:
-            for _ in range(n_gen):
+            for _ in range(n):
                 g = model.generate(prompt_ids, max_new_tokens=max_new, do_sample=True,
                                    temperature=0.8, top_p=0.95, pad_token_id=tok.eos_token_id)
                 outs.append(g)
@@ -1430,38 +1453,101 @@ def steer_eval(layer: int = 12, n_per_class: int = 200, n_gen: int = 16, max_new
                 succ.append(1 if pc == target else 0)
         return np.array(succ), np.array(ppls)
 
-    base_succ, base_ppl = evaluate(gen_with(sae_dir, 0.0))
+    # --- (1) NEUTRAL-PROMPT selection: pick the candidate whose unsteered baseline success is closest
+    # to ~0.5 (no lean toward the target class) so the sweep has headroom. The old run used the single
+    # prompt "My favorite", whose baseline was 0.81 (a ceiling). We print every candidate's baseline. ---
+    candidate_prompts = ["I", "The", "This person", "They said", "Yesterday", "My favorite"]
+    prompt_scan = []
+    for p in candidate_prompts:
+        pid = tok(p, return_tensors="pt").input_ids.to(dev)
+        s, pp = evaluate(gen_with(pid, sae_dir, 0.0, n=n_scan))
+        prompt_scan.append({"prompt": p, "baseline_success": round(float(s.mean()), 3),
+                            "baseline_ppl": round(float(pp.mean()), 2), "n_scan": n_scan})
+        print(f"PROMPT-SCAN {p!r}: baseline_success={s.mean():.3f} baseline_ppl={pp.mean():.2f}")
+    # closest to 0.5 = most neutral (no lean toward the target class); the chosen prompt's baseline is
+    # re-measured below at the full n_gen so the head-to-head uses a full-precision baseline.
+    chosen = min(prompt_scan, key=lambda r: abs(r["baseline_success"] - 0.5))
+    prompt = chosen["prompt"]
+    prompt_ids = tok(prompt, return_tensors="pt").input_ids.to(dev)
+    print(f"CHOSEN NEUTRAL PROMPT: {prompt!r} (scan baseline_success={chosen['baseline_success']})")
+
+    base_succ, base_ppl = evaluate(gen_with(prompt_ids, sae_dir, 0.0))
     base_ppl_mean = float(base_ppl.mean())
+    base_succ_mean = float(base_succ.mean())
     fluency_cap = 1.5 * base_ppl_mean
 
-    results = {"baseline_ppl": round(base_ppl_mean, 2), "baseline_success": round(float(base_succ.mean()), 3),
-               "fluency_cap_ppl": round(fluency_cap, 2), "target_class": int(top2[target]),
-               "top_feature": top_feat, "resid_rms": round(resid_rms, 1), "by_direction": {}}
-    coefs = [2.0, 4.0, 8.0]
-    for name, d in (("sae_feature", sae_dir), ("difference_of_means", dom)):
-        best = {"coef": 0.0, "success": float(base_succ.mean()), "ppl": base_ppl_mean, "succ_arr": base_succ.tolist()}
-        for c in coefs:
-            s, pp = evaluate(gen_with(d, c))
-            if pp.mean() <= fluency_cap and s.mean() >= best["success"]:
-                best = {"coef": c, "success": float(s.mean()), "ppl": float(pp.mean()), "succ_arr": s.tolist()}
-        results["by_direction"][name] = {k: (round(v, 3) if isinstance(v, float) else v) for k, v in best.items() if k != "succ_arr"}
-        results["by_direction"][name]["succ_arr"] = best["succ_arr"]
+    results = {
+        "seed": seed,
+        "chosen_prompt": prompt,
+        "prompt_scan": prompt_scan,
+        "n_gen": n_gen,
+        "baseline_ppl": round(base_ppl_mean, 2),
+        "baseline_success": round(base_succ_mean, 3),
+        "fluency_cap_ppl": round(fluency_cap, 2),
+        "target_class": int(top2[target]),
+        "top_feature": top_feat,
+        "resid_rms": round(resid_rms, 1),
+        "coef_grid": [],
+        "by_direction": {},
+    }
 
-    # bootstrap CI of the success-rate difference (SAE - dom) at each one's fluency-capped best coef
-    a = np.array(results["by_direction"]["sae_feature"]["succ_arr"], float)
-    b = np.array(results["by_direction"]["difference_of_means"]["succ_arr"], float)
-    rng = np.random.default_rng(0)
-    boot = np.array([a[rng.integers(0, len(a), len(a))].mean() - b[rng.integers(0, len(b), len(b))].mean() for _ in range(10000)])
+    # --- (2) FINER, smaller coefficient grid so a fluency-preserving sweet spot can exist. The old grid
+    # [2,4,8] all blew the fluency cap. (3) Report success AND perplexity at EVERY coef for BOTH
+    # directions, and pick each direction's best FLUENCY-PRESERVING coef (max success s.t. ppl<=cap). ---
+    coefs = [0.5, 1.0, 2.0, 3.0, 4.0]
+    results["coef_grid"] = coefs
+    for name, d in (("sae_feature", sae_dir), ("difference_of_means", dom)):
+        # full sweep, coef 0 (baseline) included for a complete success-vs-coef curve
+        sweep = [{"coef": 0.0, "success": round(base_succ_mean, 3), "ppl": round(base_ppl_mean, 2),
+                  "fluent": True, "succ_arr": base_succ.tolist()}]
+        for c in coefs:
+            s, pp = evaluate(gen_with(prompt_ids, d, c))
+            fluent = bool(pp.mean() <= fluency_cap)
+            sweep.append({"coef": c, "success": round(float(s.mean()), 3), "ppl": round(float(pp.mean()), 2),
+                          "fluent": fluent, "succ_arr": s.tolist()})
+            print(f"SWEEP {name} coef={c}: success={s.mean():.3f} ppl={pp.mean():.2f} fluent={fluent}")
+        # best fluency-preserving coef = highest success among fluent points (ties -> smaller coef)
+        fluent_pts = [pt for pt in sweep if pt["fluent"]]
+        best = max(fluent_pts, key=lambda pt: (pt["success"], -pt["coef"]))
+        results["by_direction"][name] = {
+            "sweep": [{k: v for k, v in pt.items() if k != "succ_arr"} for pt in sweep],
+            "best_coef": best["coef"],
+            "best_success": best["success"],
+            "best_ppl": best["ppl"],
+            # steering EFFECT at the best fluency-preserving coef = success minus the unsteered baseline
+            "steering_effect": round(best["success"] - base_succ_mean, 3),
+            "_best_succ_arr": best["succ_arr"],
+        }
+
+    # --- (3) head-to-head at each direction's best fluency-preserving coef + bootstrap 95% CI on the
+    # SAE-minus-dom success difference. Honest label (R4): if dom matches/beats SAE, say so plainly. ---
+    a = np.array(results["by_direction"]["sae_feature"].pop("_best_succ_arr"), float)
+    b = np.array(results["by_direction"]["difference_of_means"].pop("_best_succ_arr"), float)
+    rng = np.random.default_rng(seed)
+    boot = np.array([a[rng.integers(0, len(a), len(a))].mean() - b[rng.integers(0, len(b), len(b))].mean()
+                     for _ in range(10000)])
     lo, hi = np.percentile(boot, [2.5, 97.5])
+    sae_eff = results["by_direction"]["sae_feature"]["steering_effect"]
+    dom_eff = results["by_direction"]["difference_of_means"]["steering_effect"]
     results["sae_minus_dom"] = round(float(a.mean() - b.mean()), 3)
     results["sae_minus_dom_ci95"] = [round(float(lo), 3), round(float(hi), 3)]
-    results["verdict"] = "SAE>baseline" if lo > 0 else ("baseline>SAE" if hi < 0 else "inconclusive (CI incl 0)")
+    if lo > 0:
+        verdict = "SAE feature steers better than difference-of-means (CI excludes 0)"
+    elif hi < 0:
+        verdict = "difference-of-means matches/beats SAE feature (CI excludes 0)"
+    else:
+        verdict = "inconclusive: no significant SAE-vs-baseline difference (CI includes 0)"
+    results["verdict"] = verdict
+    results["effect_note"] = (
+        f"steering_effect SAE={sae_eff:+.3f} dom={dom_eff:+.3f} (success minus baseline {base_succ_mean:.3f})"
+    )
+
     import json as _json
     with open("/root/outputs/steering.json", "w") as fh:
         _json.dump(results, fh)
     artifacts_vol.commit()
-    print("STEER RESULT:", {k: v for k, v in results.items() if k != "by_direction"})
-    print("BY DIR:", {n: {k: v for k, v in d.items() if k != "succ_arr"} for n, d in results["by_direction"].items()})
+    print("STEER RESULT:", {k: v for k, v in results.items() if k not in ("by_direction", "prompt_scan")})
+    print("BY DIR:", {n: {k: v for k, v in d.items() if k != "sweep"} for n, d in results["by_direction"].items()})
     return results
 
 

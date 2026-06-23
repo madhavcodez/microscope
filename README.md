@@ -28,7 +28,7 @@ project is **honest evaluation** — see [`docs/RULES.md`](docs/RULES.md).
 | Auto-interp pipeline (local scorer) | **method reproduced**; scores near-chance | `repro-004` |
 | Custom SAE vs skip-transcoder interpretability head-to-head | **inconclusive** (scorer/budget) | `ai-g2-sae/tc` |
 | Randomized-model control: real-model SAE > randomized-model SAE | **conclusive** (+0.072, CI [0.033, 0.117]) | `ctrl-probe-*` |
-| Steering: SAE feature vs difference-of-means | **inconclusive** (baseline ceiling) | `ctrl-steer` |
+| Steering: SAE feature vs difference-of-means | **inconclusive** (both steer; dom matches SAE, CI incl 0) | `ctrl-steer-v2` |
 | Feature circuit: 5–10 SAE features = 94–97% of full accuracy | **conclusive (novel)** | `circuit-g2-sae` |
 
 **Honest bottom line:** the novel transcoder-vs-SAE comparison didn't resolve under a $30 budget + a weak

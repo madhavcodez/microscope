@@ -78,7 +78,7 @@ whether the interpretability is real.
 | Custom SAE reconstruction VE (own objective) | **novel** | recon-g2-sae (0.514) |
 | SAE-vs-skip-transcoder interpretability head-to-head | **inconclusive** | ai-g2-sae, ai-g2-tc (both Δ CIs include 0) |
 | Randomized-model control — real SAE has structure beyond token stats | **conclusive** | ctrl-probe-real/random (paired gap +0.072, CI [+0.033,+0.117]) |
-| Steering control (B): SAE feature vs difference-of-means | **inconclusive** | ctrl-steer (Δ 0.0, CI [−0.25,+0.25]; baseline ceiling) |
+| Steering control (B): SAE feature vs difference-of-means | **inconclusive** | ctrl-steer-v2 (both steer well within fluency: SAE +0.312, dom +0.375; Δ −0.062, CI [−0.25,+0.125]) |
 | Feature circuit — sparse + faithful (5–10 SAE features) | **conclusive (novel)** | circuit-g2-sae (top-5 = 94% of ceiling; beats random, CI excl 0) |
 
 Phase 1 claimed nothing novel (reproduction only, R1). Phase 2 produces novel *artifacts* but still
@@ -145,19 +145,43 @@ control both confirms real structure *and* quantifies how much "interpretability
 examples), so the real-vs-random auto-interp gap is not reported. Consistent with the scorer-limited
 auto-interp throughout — which is exactly why the primary axis was designed to be scorer-independent.
 
-### Control B — steering vs difference-of-means — **INCONCLUSIVE** (ran end-to-end)
+### Control B — steering vs difference-of-means — **INCONCLUSIVE** (now discriminating)
 
 Implemented per ADR-0005: steer generations at layer 12 with (a) the SAE feature most tied to the target
 profession vs (b) the `difference_of_means` direction, scoring concept-induction success (the probe) under
-a fluency bound (perplexity ≤ 1.5× baseline), with a coefficient sweep. **Result: inconclusive.** The
-unsteered baseline already classifies as the target **0.81** of the time (a probe/prompt ceiling), and
-across coefficients {2, 4, 8}×resid-RMS no steering improved success *within the fluency cap* (both
-directions' best-within-fluency coefficient was 0 = baseline). So the SAE-vs-diff-of-means success
-difference is **0.0, 95% CI [−0.25, +0.25]** — neither beats the other or the baseline here. This is an
-honest degenerate outcome (consistent with AxBench's finding that a simple baseline often matches the
-SAE): the steering *machinery* works, but this setup hit a baseline ceiling + coefficient-calibration
-limit. A discriminating steering result needs a lower-baseline prompt and a finer coefficient sweep
-(follow-up).
+a fluency bound (perplexity ≤ 1.5× baseline), with a coefficient sweep.
+
+The first run (`ctrl-steer`) was **degenerate**: the `"My favorite"` prompt already classified as the
+target **0.81** of the time (a ceiling, no headroom), and the coarse coefficients {2, 4, 8}×resid-RMS all
+broke the fluency cap, so each direction's best fluency-preserving coefficient was 0 and the head-to-head
+was trivially 0.0. We **recalibrated** (`ctrl-steer-v2`) — *same pre-registered metric and concept*, only
+the prompt and coefficient grid changed, so this is a calibration fix, **not** a new design decision
+(ADR-0005 Gate-4). Two changes: (1) scan six neutral candidate prompts and pick the one whose baseline
+success is closest to ~0.5 — `"This person"` (baseline **0.562**), versus ceilings like `"My favorite"`
+and `"I"` (both **1.0**); (2) a finer grid {0.5, 1, 2, 3, 4}×resid-RMS so a fluency-preserving sweet spot
+can exist.
+
+With headroom restored, **both directions now steer the concept substantially within the fluency cap**
+(cap = 13.76 ppl). The fluency-preserving sweet spot is **coefficient 0.5** for both; higher coefficients
+degenerate the text (perplexity 16 → 2268) and are correctly rejected:
+
+| coef | SAE success / ppl | dom success / ppl |
+|---|---|---|
+| 0.0 (baseline) | 0.562 / 9.18 | 0.562 / 9.18 |
+| **0.5** | **0.875 / 10.26** ✓ | **0.938 / 9.79** ✓ |
+| 1.0 | 0.625 / 10.75 ✓ | 1.000 / 16.64 ✗ |
+| 2.0 | 0.938 / 44.27 ✗ | 1.000 / 78.48 ✗ |
+| 3.0 | 0.688 / 344 ✗ | 0.938 / 108 ✗ |
+| 4.0 | 0.812 / 2269 ✗ | 1.000 / 338 ✗ |
+
+(✓ = within fluency cap; ✗ = perplexity over cap, success not counted.) The steering **effect** (success
+minus the 0.562 baseline) is **+0.312 for the SAE feature** and **+0.375 for difference-of-means**. The
+head-to-head difference is **SAE − dom = −0.062, 95% CI [−0.25, +0.125]** — the confidence interval
+**includes 0**, so the result is **inconclusive**: the simple difference-of-means baseline matches (and
+here slightly edges) the SAE feature. This is the **AxBench expectation stated plainly** (R4): an SAE
+feature does not steer this concept better than a plain difference-of-means direction. The difference from
+the first run is that this is now a *meaningful* inconclusive — both directions demonstrably steer with
+real headroom — rather than a degenerate ceiling artifact.
 
 ## Phase 5 — one feature circuit (ADR-0006)
 
@@ -183,10 +207,11 @@ L12 readout of this profession distinction.
 
 ## Status — Phases 1–5 done (Phase 6 = this report); PAUSED for follow-ups
 
-Phases 1–5 are complete; Phase 6 (this write-up) consolidates them. **Possible follow-ups** (not done):
-a calibrated Control-B steering sweep, the sparsify→sae_lens adapter to run the custom coders through the
-full SAEBench suite, a stronger auto-interp scorer (the near-chance bottleneck throughout), and a
-multi-layer (cross-component) circuit. Open questions/risks: PHASE1_RETROSPECTIVE.md.
+Phases 1–5 are complete; Phase 6 (this write-up) consolidates them. The Control-B steering sweep was
+recalibrated (`ctrl-steer-v2`) into a discriminating, honestly-inconclusive result. **Possible follow-ups**
+(not done): the sparsify→sae_lens adapter to run the custom coders through the full SAEBench suite, a
+stronger auto-interp scorer (the near-chance bottleneck throughout), and a multi-layer (cross-component)
+circuit. Open questions/risks: PHASE1_RETROSPECTIVE.md.
 
 ## Reproducibility & cost
 
