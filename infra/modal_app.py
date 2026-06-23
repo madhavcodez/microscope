@@ -1463,3 +1463,104 @@ def steer_eval(layer: int = 12, n_per_class: int = 200, n_gen: int = 16, max_new
     print("STEER RESULT:", {k: v for k, v in results.items() if k != "by_direction"})
     print("BY DIR:", {n: {k: v for k, v in d.items() if k != "succ_arr"} for n, d in results["by_direction"].items()})
     return results
+
+
+@app.function(
+    image=pkg_image, gpu="L4", secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=2400, retries=0,
+)
+def circuit_eval(run_name: str = "train_gemma2_2b_l12-sae", layer: int = 12,
+                 n_per_class: int = 300, seq_len: int = 64) -> dict:
+    """Phase 5 (ADR-0006): a single-layer SAE-feature circuit for the bias-in-bios profession behavior.
+
+    Attribution = per-feature |mean_act(class1) - mean_act(class0)| (probe-independent). Circuit = top-K.
+    Faithfulness = fresh probe on ONLY top-K (sufficiency) vs fresh probe on K RANDOM features (control)
+    vs full-feature ceiling, with a paired bootstrap CI on the top-K - random-K gap (R2/R3)."""
+    import os
+
+    import numpy as np
+    import sparsify
+    import torch
+    from datasets import load_dataset
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import train_test_split
+    from transformers import AutoModel, AutoTokenizer
+
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    dev = "cuda"
+    sae = sparsify.SparseCoder.load_from_disk(
+        f"/root/outputs/coders/{run_name}/layers.{layer}", device=dev
+    ).to(dev, torch.bfloat16)
+    d_sae = int(sae.cfg.num_latents)
+    model = AutoModel.from_pretrained("google/gemma-2-2b", torch_dtype=torch.bfloat16, token=token).to(dev).eval()
+    tok = AutoTokenizer.from_pretrained("google/gemma-2-2b", token=token)
+    lm = model.layers[layer]
+
+    ds = load_dataset("LabHC/bias_in_bios", split="train")
+    from collections import Counter
+    top2 = [c for c, _ in Counter(ds["profession"]).most_common(2)]
+    buf = {c: [] for c in top2}
+    cap: dict = {}
+
+    def dense(x):
+        enc = sae.encode(x.to(torch.bfloat16))
+        if torch.is_tensor(enc) and enc.shape[-1] == d_sae:
+            return enc.float()
+        ta, ti = getattr(enc, "top_acts", enc[0]), getattr(enc, "top_indices", enc[1])
+        out = torch.zeros(x.shape[0], d_sae, device=x.device); out.scatter_(1, ti.long(), ta.float())
+        return out
+
+    X, y = [], []
+    with torch.no_grad():
+        for tx, lb in zip(ds["hard_text"], ds["profession"]):
+            if lb in buf and len(buf[lb]) < n_per_class and tx and tx.strip():
+                buf[lb].append(1)
+                ids = tok(tx, return_tensors="pt", truncation=True, max_length=seq_len).input_ids.to(dev)
+                h = lm.register_forward_hook(lambda m, i, o: cap.__setitem__("y", o[0] if isinstance(o, tuple) else o))
+                model(ids); h.remove()
+                X.append(dense(cap["y"][0, 1:].to(torch.bfloat16)).mean(0).cpu().numpy())
+                y.append(0 if lb == top2[0] else 1)
+    X, y = np.array(X), np.array(y)
+
+    # attribution (probe-independent): per-feature class-mean activation difference
+    attr = np.abs(X[y == 1].mean(0) - X[y == 0].mean(0))
+    order = np.argsort(-attr)
+
+    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.3, random_state=0, stratify=y)
+
+    def probe_acc(cols):
+        clf = LogisticRegression(max_iter=2000, C=0.5).fit(Xtr[:, cols], ytr)
+        return (clf.predict(Xte[:, cols]) == yte).astype(float)
+
+    full_correct = probe_acc(np.arange(d_sae))
+    ceiling = float(full_correct.mean())
+    rng = np.random.default_rng(0)
+    per_k = []
+    for K in (5, 10, 20, 50):
+        top = order[:K]
+        rnd = rng.choice(d_sae, K, replace=False)
+        ct, cr = probe_acc(top), probe_acc(rnd)
+        n = len(yte)
+        boot = np.array([ct[i].mean() - cr[j].mean()
+                         for i, j in ((rng.integers(0, n, n), rng.integers(0, n, n)) for _ in range(5000))])
+        lo, hi = np.percentile(boot, [2.5, 97.5])
+        per_k.append({
+            "K": K, "acc_topK": round(float(ct.mean()), 4), "acc_randomK": round(float(cr.mean()), 4),
+            "faithfulness_vs_ceiling": round(float(ct.mean() / ceiling), 3),
+            "gap_topK_minus_randomK": round(float(ct.mean() - cr.mean()), 4),
+            "gap_ci95": [round(float(lo), 4), round(float(hi), 4)],
+            "circuit_beats_random": bool(lo > 0),
+        })
+    out = {
+        "run_name": run_name, "behavior": f"bias_in_bios professions {top2}",
+        "d_sae": d_sae, "n_examples": len(y), "ceiling_acc_full": round(ceiling, 4),
+        "top10_feature_ids": [int(i) for i in order[:10]],
+        "top10_attribution": [round(float(attr[i]), 4) for i in order[:10]],
+        "by_K": per_k,
+    }
+    import json as _json
+    with open("/root/outputs/circuit.json", "w") as fh:
+        _json.dump(out, fh)
+    artifacts_vol.commit()
+    print("CIRCUIT RESULT:", {k: v for k, v in out.items() if k != "top10_attribution"})
+    return out
