@@ -1,9 +1,10 @@
 # PROGRESS
 
 ## Current phase
-**PHASES 1-6 COMPLETE (2026-06-22); Control-B steering recalibrated + 7B scorer head-to-head RESOLVED 2026-06-23.**
-CORE PROJECT DONE: reproduce -> train -> head-to-head -> controls -> circuit -> write-up. Spend ≈ $11.6 of $30
-(7B A100 unit ≈ $0.6). THREE conclusive results now: two scorer-independent (randomized-model control +
+**PHASES 1-6 COMPLETE (2026-06-22); Control-B steering recalibrated + 7B scorer head-to-head RESOLVED 2026-06-23;
+SAEBench-custom-SAE adapter b_dec bug FIXED + re-run (encode-verified) 2026-06-23.**
+CORE PROJECT DONE: reproduce -> train -> head-to-head -> controls -> circuit -> write-up. Spend ≈ $11.8 of $30
+(7B A100 unit ≈ $0.6; adapter-fix verify+eval ≈ $0.2). THREE conclusive results now: two scorer-independent (randomized-model control +
 sparse feature circuit) PLUS the novel SAE-vs-transcoder head-to-head, which RESOLVED once a strong-enough
 scorer was used — inconclusive at the 3B scorer (both CIs incl 0) but the **skip-transcoder WINS at the 7B
 scorer** on both detection (Δ+0.053 CI[+0.016,+0.089]) and fuzzing (Δ+0.059 CI[+0.019,+0.097]); the
@@ -18,9 +19,10 @@ recurring near-chance was a SCORER artifact (3B), not a coder limit (ai-g2-sae-7
   hooks; ForwardOutput.fvu is input-recon inflated by skip). Auto-interp (delphi, custom dicts; fixed cpu->cuda
   + fp32->bf16 loader bugs): SAE det 0.540/fuzz 0.523 (n=58) vs TC det 0.539/fuzz 0.546 (n=61); both Δ bootstrap
   CIs include 0 => no significant difference (scorer-limited, matches repro-004). SAEBench on custom coders:
-  the deferred sae_lens adapter is now BUILT (ADR-0007, saebench-custom-sae) — custom SAE sae_top_1=0.667,
-  BELOW Gemma Scope 0.767 AND below its own residual baseline 0.688 (honest budget-training result, R4);
-  transcoder N/A (R3, resid-probing oriented).
+  the deferred sae_lens adapter is now BUILT + encode-verified (ADR-0007, saebench-custom-sae-v2) — custom
+  SAE sae_top_1=0.670, BELOW Gemma Scope 0.767 AND below its own residual baseline 0.688 (honest
+  budget-training result, R4); transcoder N/A (R3, resid-probing oriented). [v1 reported 0.667 with an
+  apply_b_dec_to_input bug — adapter artifact, corrected 2026-06-23; see Coder log + ADR-0007 Correction.]
 - **Phase 4 DONE (controls = the differentiator):**
   - Control A randomized-model (ADR-0005): PRIMARY (scorer-independent) = CONCLUSIVE. SAE-feature linear probe
     on bias_in_bios professions: real-model SAE 0.933 vs random-model SAE 0.861; PAIRED gap +0.072, CI95
@@ -48,11 +50,13 @@ recurring near-chance was a SCORER artifact (3B), not a coder limit (ai-g2-sae-7
 - ~~Calibrated Control-B steering sweep~~ DONE 2026-06-23 (ctrl-steer-v2): neutral prompt + finer grid =>
   discriminating, honestly-inconclusive (dom matches/slightly beats SAE, CI incl 0).
 - ~~sparsify->sae_lens adapter for SAEBench on the custom coders (Phase-3 SAEBench was SAE-only)~~ DONE
-  2026-06-23 (ADR-0007, saebench-custom-sae): `_sparsify_to_topk_sae` wraps the sparsify SAE as a native
-  sae_lens.TopKSAE; full sparse_probing ran on the custom SAE => sae_top_1=0.667 (< Gemma Scope 0.767 AND
-  < its own residual baseline 0.688; honest budget-training result, R4). Transcoder N/A (R3). Adapter
-  verified before the paid run (verify_saebench_adapter: 4/4 weights, k=64 enforced, SAEBench accepts).
-  Remaining: scale to the full 8-dataset SAEBench suite.
+  2026-06-23 (ADR-0007, saebench-custom-sae-v2): `_sparsify_to_topk_sae` wraps the sparsify SAE as a native
+  sae_lens.TopKSAE; full sparse_probing ran on the custom SAE => sae_top_1=0.670 (< Gemma Scope 0.767 AND
+  < its own residual baseline 0.688; honest budget-training result, R4, encode-verified). Transcoder N/A
+  (R3). Adapter verified before the paid run (verify_saebench_adapter: 4/4 weights, k=64 enforced, SAEBench
+  accepts, AND encode-fidelity vs sparsify coder.encode — Jaccard 1.0, cosine 1.0; the buggy =False variant
+  fails it). [v1 had an apply_b_dec_to_input=False bug => 0.667 artifact; FIXED 2026-06-23.] Remaining:
+  scale to the full 8-dataset SAEBench suite.
 - ~~Stronger auto-interp scorer (the near-chance bottleneck throughout)~~ RESOLVED 2026-06-23
   (ai-g2-sae-7b / ai-g2-tc-7b). The L4 ATTEMPT (ai-g2-7b-ATTEMPT) was blocked because delphi keeps the
   Gemma base model resident through scoring (only ~16/22 GiB free, 7B can't start). FIX = run the 7B on an
@@ -358,3 +362,38 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
     CUSTOM-SAE RESULT stdout line; (d) the residual baseline (0.688) matches repro-003's (SAE-independent
     sanity check); (e) no fabricated numbers (R5); the 0.667<0.688 below-baseline result is reported as-is.
     A re-run with seed 42 + same config should reproduce (modulo minor GPU nondeterminism, E1).
+- 2026-06-23 (coder): FIXED a CRITICAL adapter encode bug found by QC + RE-RAN. ADR-0007 v1 set
+  `apply_b_dec_to_input=False` in `_sparsify_to_topk_sae` on the premise that sparsify's TopK encode does
+  not subtract b_dec. That premise was FACTUALLY WRONG, so v1's sae_top_1=0.667 was an adapter artifact.
+  - E4 FIRST (probe_sparsify_encode, NEW): read the INSTALLED sparsify `SparseCoder.encode` verbatim on
+    Modal => `if not self.cfg.transcode: x = x - self.b_dec` then fused_encoder. Coder under test has
+    cfg.transcode=False (b_dec norm ≈ 90.7), so sparsify's true encode is `(x−b_dec)@Wencᵀ+b_enc` while the
+    buggy adapter did `x@Wencᵀ+b_enc`. Confirmed `- self.b_dec` present in source.
+  - FIX (infra/modal_app.py): (1) `_sparsify_to_topk_sae` now sets `apply_b_dec_to_input=True` (b_dec is
+    copied into the SAE, so sae_lens applies the same shift) + corrected comment. (2) NEW encode-fidelity
+    check in `verify_saebench_adapter` (helpers `_sparsify_dense_acts`/`_encode_fidelity`/`_fidelity_with_b_dec_flag`):
+    runs BOTH the real sparsify coder.encode and the adapter.encode on the same random AND real-resid
+    batches, asserts identical active TopK indices (per-row Jaccard) + values within tol; HARD-FAILS on
+    random mismatch; ALSO computes the apply_b_dec=False variant to document the contrast; persists the
+    verify dict to /root/outputs/saebench_adapter_verify.json (H2). (3) result-dict dataset label fixed to
+    "LabHC/bias_in_bios_class_set1" (M1; was dropping the suffix).
+  - RAN (Modal L4, PYTHONUTF8=1, seed logged E1): verify_saebench_adapter => encode-fidelity PASSES with
+    True (random: Jaccard 1.0 all 8 rows, max abs diff 6e-6, cosine 1.0; real-resid: Jaccard 1.0 all 16
+    rows, max abs diff 7.6e-5, cosine 1.0) and the False variant FAILS the SAME check (Jaccard ≈ 0.07,
+    cosine 0.139) — this is the check that would have caught the bug. Then saebench_sparse_probing_custom
+    => CORRECTED sae_top_1=0.670 (vs buggy 0.667), baseline 0.6876 UNCHANGED (SAE-independent, == repro-003),
+    full-feat 0.9496. ~$0.2 GPU total (1 verify + 1 eval), under the $3 cap. The +0.003 move shows a top-1
+    best-single-feature probe is robust to which near-equivalent budget latents win; the result now rests on
+    a verified-correct encode. CONCLUSION UNCHANGED + now REAL: 0.670 < baseline 0.688 < Gemma Scope 0.767,
+    the honest negative STANDS (encode-verified, R4).
+  - DOCS: ADR-0007 (Correction section + premise corrected + fidelity = real correctness evidence),
+    EXPERIMENTS.md (v1 row annotated BUGGY/superseded + new saebench-custom-sae-v2 row), REPORT.md (table
+    rows + SAEBench subsection + adapter-correctness paragraph + status), README, PROGRESS (this). COMMITTED on main.
+  - HANDOFF / tester: (a) py_compile infra/modal_app.py; the new helpers + probe_sparsify_encode exist and
+    are NOT @app.function-decorated (helpers must stay plain — a misplaced decorator caused a first-run
+    'Function not callable', since fixed); (b) ruff adds no NEW non-E501 issue on my lines vs baseline;
+    170 CPU tests still pass (infra not imported by the package); (c) numbers in EXPERIMENTS/REPORT/README/
+    ADR-0007 match saebench_custom_sae.json (sae_top_1 0.670) AND saebench_adapter_verify.json
+    (encode_fidelity_PASS True) on the volume; (d) the False-variant contrast in the verify json FAILS
+    (proves the check is real); (e) no fabricated numbers (R5). Re-run with seed 42 reproduces modulo GPU
+    nondeterminism (E1).

@@ -1468,6 +1468,78 @@ def probe_saebench_adapter3() -> dict:
 
 
 @app.function(
+    image=full_image, secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=600, retries=0,
+)
+def probe_sparsify_encode(run_name: str = "train_gemma2_2b_l12-sae", layer: int = 12) -> dict:
+    """E4 (ADR-0007 correction): does sparsify's SparseCoder.encode SUBTRACT b_dec from the input
+    before the fused TopK encoder when the coder is NOT a transcode SAE? ADR-0007 v1 claimed it does
+    not (and set apply_b_dec_to_input=False); QC found the opposite. This probe reads the INSTALLED
+    sparsify source AND demonstrates the shift empirically, so the fix is grounded in the real API,
+    not memory. CPU-only (no GPU)."""
+    import inspect
+
+    import sparsify
+    import torch
+
+    out: dict = {}
+    out["sparsify_file"] = sparsify.__file__
+    # The encode (and any helper it delegates to) verbatim — the ground truth.
+    SC = sparsify.SparseCoder
+    try:
+        out["SparseCoder.encode_src"] = inspect.getsource(SC.encode)[:2000]
+    except (OSError, TypeError) as exc:
+        out["SparseCoder.encode_src"] = f"FAIL: {exc}"
+    for helper in ("pre_acts", "_encode", "select_topk", "forward"):
+        fn = getattr(SC, helper, None)
+        if fn is not None:
+            try:
+                out[f"SparseCoder.{helper}_src"] = inspect.getsource(fn)[:1400]
+            except (OSError, TypeError) as exc:
+                out[f"SparseCoder.{helper}_src"] = f"FAIL: {exc}"
+    # Static signal: does the encode/pre_acts path mention subtracting b_dec?
+    enc_src = out.get("SparseCoder.encode_src", "") + out.get("SparseCoder.pre_acts_src", "")
+    out["src_mentions_minus_b_dec"] = ("- self.b_dec" in enc_src) or ("-self.b_dec" in enc_src)
+
+    # Empirical proof on the REAL coder: compare encode() to a from-scratch encode WITHOUT the
+    # b_dec subtraction. If sparsify subtracts b_dec, the no-subtraction reconstruction diverges.
+    coder = sparsify.SparseCoder.load_from_disk(
+        f"/root/outputs/coders/{run_name}/layers.{layer}", device="cpu"
+    )
+    out["cfg.transcode"] = bool(getattr(coder.cfg, "transcode", False))
+    out["cfg.skip_connection"] = bool(getattr(coder.cfg, "skip_connection", False))
+    sd = coder.state_dict()
+    W_enc_T = sd["encoder.weight"]  # (d_sae, d_in) — sparsify stores encoder.weight as out x in
+    b_enc = sd["encoder.bias"]
+    b_dec = sd["b_dec"]
+    d_in = int(b_dec.shape[0])
+    torch.manual_seed(0)
+    x = torch.randn(4, d_in, dtype=W_enc_T.dtype)
+
+    with torch.no_grad():
+        true_pre = coder.pre_acts(x) if hasattr(coder, "pre_acts") else None
+        # Manual pre-activations WITH and WITHOUT the b_dec subtraction.
+        pre_with = (x - b_dec) @ W_enc_T.T + b_enc
+        pre_without = x @ W_enc_T.T + b_enc
+    if true_pre is not None:
+        out["match_with_b_dec_subtraction"] = bool(
+            torch.allclose(true_pre, pre_with, atol=1e-4, rtol=1e-3)
+        )
+        out["match_without_b_dec_subtraction"] = bool(
+            torch.allclose(true_pre, pre_without, atol=1e-4, rtol=1e-3)
+        )
+        out["max_abs_diff_pre_with"] = round(float((true_pre - pre_with).abs().max()), 6)
+        out["max_abs_diff_pre_without"] = round(float((true_pre - pre_without).abs().max()), 6)
+    out["b_dec_norm"] = round(float(b_dec.norm()), 4)
+    # VERDICT: sparsify subtracts b_dec iff the with-subtraction path matches.
+    out["VERDICT_sparsify_subtracts_b_dec"] = bool(out.get("match_with_b_dec_subtraction", False))
+
+    for k, v in out.items():
+        print(f"=== {k} ===\n{v}\n")
+    return out
+
+
+@app.function(
     image=pkg_image, gpu="L4", secrets=[HF_SECRET],
     volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=2400, retries=0,
 )
@@ -1943,7 +2015,12 @@ def _sparsify_to_topk_sae(coder_dir: str, layer: int, device: str, dtype: str = 
         k=k,
         dtype=dtype,
         device=device,
-        apply_b_dec_to_input=False,  # sparsify TopK does not subtract b_dec before encode
+        # sparsify's SparseCoder.encode subtracts b_dec for a non-transcode SAE
+        # (`if not self.cfg.transcode: x = x - self.b_dec`, verified in the installed source via
+        # probe_sparsify_encode, ADR-0007). b_dec is copied into this SAE below, so setting
+        # apply_b_dec_to_input=True makes sae_lens perform the SAME (x - b_dec) shift -> identical
+        # pre-activations and identical TopK selection (encode-fidelity check enforces this).
+        apply_b_dec_to_input=True,
         normalize_activations="none",
         metadata=SAEMetadata(
             model_name="gemma-2-2b",
@@ -1969,6 +2046,62 @@ def _sparsify_to_topk_sae(coder_dir: str, layer: int, device: str, dtype: str = 
     }
 
 
+def _sparsify_dense_acts(coder, x):
+    """Run a sparsify SparseCoder's encode and return the DENSE (batch, d_sae) activation tensor,
+    scattering its sparse TopK output (top_acts at top_indices) into the full latent space. This is
+    the ground-truth activation the SAEBench probe consumes; we compare the adapter against it."""
+    import torch
+
+    enc = coder.encode(x)
+    # EncoderOutput is a NamedTuple-like (top_acts, top_indices, pre_acts).
+    top_acts = enc.top_acts if hasattr(enc, "top_acts") else enc[0]
+    top_indices = enc.top_indices if hasattr(enc, "top_indices") else enc[1]
+    d_sae = int(coder.cfg.num_latents)
+    dense = torch.zeros(x.shape[0], d_sae, device=x.device, dtype=top_acts.dtype)
+    dense.scatter_(1, top_indices.long(), top_acts.to(dense.dtype))
+    return dense
+
+
+def _encode_fidelity(coder, sae, x, k):
+    """Compare the adapter SAE.encode against sparsify coder.encode on the SAME input batch.
+    Returns a dict: same active TopK indices per row AND values within a tight tolerance. This is
+    the check that catches an apply_b_dec_to_input mismatch (a per-latent pre-activation shift that
+    changes WHICH TopK latents fire)."""
+    import torch
+
+    true_dense = _sparsify_dense_acts(coder, x)  # (B, d_sae)
+    adapter_dense = sae.encode(x)  # sae_lens TopKSAE returns dense (B, d_sae)
+    if adapter_dense.dtype != true_dense.dtype:
+        adapter_dense = adapter_dense.to(true_dense.dtype)
+
+    # Active-index agreement, per row (TopK selection is what the probe ultimately keys on).
+    idx_match = []
+    for i in range(x.shape[0]):
+        a = set(torch.nonzero(true_dense[i], as_tuple=False).flatten().tolist())
+        b = set(torch.nonzero(adapter_dense[i], as_tuple=False).flatten().tolist())
+        inter = len(a & b)
+        union = len(a | b) or 1
+        idx_match.append(inter / union)  # Jaccard over active sets
+    # Value agreement on the full dense tensor (zeros where inactive, so this also penalises a
+    # wrong active set). Tight tolerance: bf16-loaded weights cast to fp32, so ~1e-3 is generous.
+    max_abs_diff = float((true_dense - adapter_dense).abs().max())
+    cos = torch.nn.functional.cosine_similarity(
+        true_dense.flatten().float(), adapter_dense.flatten().float(), dim=0
+    )
+    same_active = all(m == 1.0 for m in idx_match)
+    values_close = bool(torch.allclose(true_dense, adapter_dense, atol=1e-3, rtol=1e-2))
+    return {
+        "batch": int(x.shape[0]),
+        "k": int(k),
+        "per_row_active_jaccard": [round(m, 4) for m in idx_match],
+        "same_active_indices": bool(same_active),
+        "max_abs_value_diff": round(max_abs_diff, 6),
+        "dense_cosine_sim": round(float(cos), 6),
+        "values_within_tol": values_close,
+        "PASS": bool(same_active and values_close),
+    }
+
+
 @app.function(
     image=full_image, gpu="L4", secrets=[HF_SECRET],
     volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=900, retries=0,
@@ -1976,8 +2109,18 @@ def _sparsify_to_topk_sae(coder_dir: str, layer: int, device: str, dtype: str = 
 def verify_saebench_adapter(run_name: str = "train_gemma2_2b_l12-sae", layer: int = 12) -> dict:
     """E4 pre-flight (cheap, ~1-2 min GPU): build the sparsify->sae_lens TopKSAE adapter and prove
     it (a) loads weights, (b) encode/decode round-trips with exactly k active latents, (c) passes
-    SAEBench's load_and_format_sae (check_decoder_norms + _standardize_sae_cfg) WITHOUT error,
-    before paying for the full sparse_probing run. Verifies the adapter, not the eval."""
+    SAEBench's load_and_format_sae (check_decoder_norms + _standardize_sae_cfg) WITHOUT error, and
+    (d) ENCODE-FIDELITY: the adapter's encode reproduces sparsify's TRUE coder.encode (same active
+    TopK indices AND values within tolerance) on random AND real resid vectors. (d) is the check
+    that would have caught the apply_b_dec_to_input bug -- it PASSES only when the adapter applies
+    the SAME (x - b_dec) shift sparsify does; it FAILS if apply_b_dec_to_input is left False (the
+    function also computes that failing variant explicitly to document the contrast). Persists the
+    verify dict to the volume (saebench_adapter_verify.json, traceability). Verifies the adapter,
+    not the eval. Budget ~$0.3 L4."""
+    import json
+    import os
+
+    import sparsify
     import torch
 
     dev = "cuda"
@@ -2006,8 +2149,111 @@ def verify_saebench_adapter(run_name: str = "train_gemma2_2b_l12-sae", layer: in
     out["cfg.model_name"] = str(getattr(formatted.cfg, "model_name", "MISSING"))
     out["decoder_norms_ok"] = bool(general_utils.check_decoder_norms(formatted.W_dec.data))
 
+    # (d) ENCODE-FIDELITY (the bug-catching check). Compare the adapter to the REAL sparsify coder
+    # on (1) random inputs and (2) a few real resid@L vectors from Gemma-2-2B. The adapter's encode
+    # must match sparsify's coder.encode -- same active TopK indices AND values within tolerance.
+    coder = sparsify.SparseCoder.load_from_disk(coder_dir, device=dev)
+    coder_dtype = next(coder.parameters()).dtype
+    k = info["k"]
+
+    # (1) random batch (in the coder's own dtype so the comparison is apples-to-apples).
+    torch.manual_seed(0)
+    x_rand = torch.randn(8, info["d_in"], device=dev, dtype=coder_dtype)
+    fid_rand = _encode_fidelity(coder, sae, x_rand, k)
+
+    # (2) real resid vectors harvested from Gemma at the hook layer.
+    fid_real = None
+    try:
+        from datasets import load_dataset
+        from transformers import AutoModel, AutoTokenizer
+
+        token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        model = AutoModel.from_pretrained(
+            "google/gemma-2-2b", torch_dtype=coder_dtype, token=token
+        ).to(dev).eval()
+        tok = AutoTokenizer.from_pretrained("google/gemma-2-2b", token=token)
+        ds = load_dataset("NeelNanda/pile-10k", split="train[:4]")
+        texts = [t for t in ds["text"] if t and t.strip()][:4]
+        cap: dict = {}
+        lm = model.layers[layer]
+        tt = lambda o: o[0] if isinstance(o, tuple) else o  # noqa: E731
+        rows = []
+        with torch.no_grad():
+            for text in texts:
+                cap.clear()
+                ids = tok(
+                    text, return_tensors="pt", truncation=True, max_length=64
+                ).input_ids.to(dev)
+                h = lm.register_forward_hook(lambda m, i, o: cap.__setitem__("r", tt(o)))
+                model(ids)
+                h.remove()
+                rows.append(cap["r"][0, 1:])  # drop BOS
+        x_real = torch.cat(rows, dim=0)[:16].to(coder_dtype)
+        fid_real = _encode_fidelity(coder, sae, x_real, k)
+    except Exception as exc:  # noqa: BLE001
+        fid_real = {"PASS": None, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+
+    out["encode_fidelity_random"] = fid_rand
+    out["encode_fidelity_real_resid"] = fid_real
+
+    # Document the CONTRAST: rebuild the adapter with apply_b_dec_to_input=False (ADR-0007 v1's
+    # buggy setting) and show fidelity FAILS -- this is the bug the check now guards against.
+    out["contrast_apply_b_dec_FALSE"] = _fidelity_with_b_dec_flag(
+        coder, sae, x_rand, k, apply_b_dec=False
+    )
+
+    out["encode_fidelity_PASS"] = bool(
+        fid_rand["PASS"] and (fid_real is None or fid_real.get("PASS") in (True, None))
+    )
+    # Hard gate: a True-with-b_dec adapter MUST pass on random inputs (real may be skipped if the
+    # gated model is unavailable, but random fidelity is unconditional).
+    if not fid_rand["PASS"]:
+        raise RuntimeError(
+            "ENCODE-FIDELITY FAILED on random inputs: adapter.encode != sparsify.coder.encode "
+            f"(same_active={fid_rand['same_active_indices']}, "
+            f"max_abs_diff={fid_rand['max_abs_value_diff']}). Check apply_b_dec_to_input."
+        )
+
+    # Persist for traceability (H2): the verify dict on the artifacts volume.
+    with open("/root/outputs/saebench_adapter_verify.json", "w") as fh:
+        json.dump(out, fh, indent=2)
+    artifacts_vol.commit()
+
     print("ADAPTER VERIFY:", out)
     return out
+
+
+def _fidelity_with_b_dec_flag(coder, ref_sae, x, k, apply_b_dec: bool) -> dict:
+    """Build a fresh TopKSAE from the SAME weights but with a chosen apply_b_dec_to_input, and report
+    its encode-fidelity vs the real sparsify coder. Used to DEMONSTRATE that the buggy False setting
+    fails while the corrected True setting passes (the contrast the QC bug report calls for)."""
+    from sae_lens import TopKSAE, TopKSAEConfig
+    from sae_lens.saes.sae import SAEMetadata
+
+    sd = coder.state_dict()
+    d_in = int(sd["b_dec"].shape[0])
+    d_sae = int(coder.cfg.num_latents)
+    dtype = ref_sae.W_dec.dtype
+    cfg = TopKSAEConfig(
+        d_in=d_in, d_sae=d_sae, k=k, dtype=str(dtype).replace("torch.", ""), device=str(x.device),
+        apply_b_dec_to_input=apply_b_dec, normalize_activations="none",
+        metadata=SAEMetadata(
+            model_name="gemma-2-2b", hook_name="blocks.12.hook_resid_post", hook_layer=12
+        ),
+    )
+    alt = TopKSAE(cfg)
+    alt.load_state_dict(
+        {
+            "W_enc": sd["encoder.weight"].T.contiguous().to(dtype),
+            "b_enc": sd["encoder.bias"].to(dtype),
+            "W_dec": sd["W_dec"].to(dtype),
+            "b_dec": sd["b_dec"].to(dtype),
+        },
+        strict=False,
+    )
+    alt = alt.to(device=x.device, dtype=dtype).eval()
+    fid = _encode_fidelity(coder, alt, x, k)
+    return {"apply_b_dec_to_input": apply_b_dec, **fid}
 
 
 @app.function(
@@ -2083,7 +2329,7 @@ def saebench_sparse_probing_custom(
         "adapter": "sparsify->sae_lens.TopKSAE",
         "d_in": info["d_in"], "d_sae": info["d_sae"], "k": info["k"],
         "seed": seed,
-        "dataset": "LabHC/bias_in_bios",
+        "dataset": "LabHC/bias_in_bios_class_set1",
         "sae_top_1_test_accuracy": sae_m.get("sae_top_1_test_accuracy"),
         "sae_test_accuracy": sae_m.get("sae_test_accuracy"),
         "llm_top_1_test_accuracy": llm_m.get("llm_top_1_test_accuracy"),

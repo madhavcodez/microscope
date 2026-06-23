@@ -82,7 +82,7 @@ whether the interpretability is real.
 | Auto-interp *absolute* detection/fuzz scores are scorer-size dependent (near-chance at 3B, well above at 7B) | **reproduced (effect)** | repro-004 (3B near-chance) vs ai-g2-*-7b (7B: 0.61–0.69) |
 | Custom SAE + skip-transcoder trained on Gemma-2-2B (artifacts; no interp claim yet) | **novel (artifact)** | train-g2-sae, train-g2-tc |
 | Custom SAE reconstruction VE (own objective) | **novel** | recon-g2-sae (0.514) |
-| Custom SAE SAEBench sparse-probing (top-1) — below Gemma Scope AND below its own residual baseline | **novel (honest negative)** | saebench-custom-sae (0.667 vs ref 0.767; baseline 0.688) |
+| Custom SAE SAEBench sparse-probing (top-1) — below Gemma Scope AND below its own residual baseline | **novel (honest negative; encode-verified)** | saebench-custom-sae-v2 (0.670 vs ref 0.767; baseline 0.688) |
 | SAE-vs-skip-transcoder interpretability head-to-head | **scorer-dependent: inconclusive at 3B, transcoder WINS at 7B (novel)** | ai-g2-sae/tc (3B, CIs incl 0) → ai-g2-sae-7b/tc-7b (7B: det Δ+0.053 CI[+0.016,+0.089], fuzz Δ+0.059 CI[+0.019,+0.097]) |
 | Randomized-model control — real SAE has structure beyond token stats | **conclusive** | ctrl-probe-real/random (paired gap +0.072, CI [+0.033,+0.117]) |
 | Steering control (B): SAE feature vs difference-of-means | **inconclusive** | ctrl-steer-v2 (both steer well within fluency: SAE +0.312, dom +0.375; Δ −0.062, CI [−0.25,+0.125]) |
@@ -122,7 +122,7 @@ interpretability-vs-reconstruction; every SAE-vs-transcoder delta is reported wi
 | Auto-interp **fuzzing** (3B scorer) | 0.523 | 0.546 | +0.023, [−0.001, +0.047] | **inconclusive** |
 | Auto-interp **detection** (7B scorer) | 0.607 (n=58) | 0.660 (n=60) | **+0.053, [+0.016, +0.089]** | **transcoder wins** |
 | Auto-interp **fuzzing** (7B scorer) | 0.631 | 0.690 | **+0.059, [+0.019, +0.097]** | **transcoder wins** |
-| SAEBench sparse_probing (top-1) | 0.667 (custom SAE; baseline 0.688) | N/A (transcoder) | — | SAE below its own baseline + below Gemma Scope (ADR-0007) |
+| SAEBench sparse_probing (top-1) | 0.670 (custom SAE; baseline 0.688) | N/A (transcoder) | — | SAE below its own baseline + below Gemma Scope (ADR-0007, encode-verified) |
 
 **Verdict: scorer-dependent — INCONCLUSIVE at the 3B scorer, but the skip-transcoder WINS once the
 scorer is strong enough (7B).** With the weak 3B local scorer neither auto-interp delta's CI excludes
@@ -185,19 +185,32 @@ The Phase-3 SAEBench axis was originally SAE-only-and-deferred: SAEBench consume
 `sae_lens` objects, but our coders are EleutherAI **sparsify** `SparseCoder`s, so running it on the custom
 SAE needed an adapter. That adapter now exists (`_sparsify_to_topk_sae`): it wraps the sparsify SAE as a
 real `sae_lens.TopKSAE` (`W_enc = encoder.weight.T`, `b_enc = encoder.bias`, `W_dec`/`b_dec` copied, k=64,
-`hook_name`/`hook_layer`/`model_name` in `cfg.metadata`), all API-verified on Modal (E4). A cheap GPU
-pre-flight (`verify_saebench_adapter`) confirmed the SAE loads all four weight tensors, enforces exactly
-k=64 active latents on encode, and is accepted by SAEBench's `load_and_format_sae`, before paying for the
-full eval. The eval uses the **identical config as repro-003** (`LabHC/bias_in_bios_class_set1`, train
-1500 / test 500, k=1, seed 42), so the custom number is directly comparable to the Gemma Scope reference.
+`apply_b_dec_to_input=True`, `hook_name`/`hook_layer`/`model_name` in `cfg.metadata`), all API-verified on
+Modal (E4). A cheap GPU pre-flight (`verify_saebench_adapter`) confirmed the SAE loads all four weight
+tensors, enforces exactly k=64 active latents on encode, is accepted by SAEBench's `load_and_format_sae`,
+and — critically — passes an **encode-fidelity** check before paying for the full eval. The eval uses the
+**identical config as repro-003** (`LabHC/bias_in_bios_class_set1`, train 1500 / test 500, k=1, seed 42),
+so the custom number is directly comparable to the Gemma Scope reference.
 
-**Result — honest (R4):** the budget-trained custom SAE scores **`sae_top_1` = 0.667**, **below** the
+**Adapter correctness (encode-fidelity — the load-bearing evidence).** sparsify's `SparseCoder.encode`
+subtracts the decoder bias for a non-transcode SAE (`if not self.cfg.transcode: x = x - self.b_dec`,
+read from the installed source, E4), so the adapter sets `apply_b_dec_to_input=True` to reproduce that
+shift exactly. This is *verified, not assumed*: `verify_saebench_adapter` runs both the real sparsify
+`coder.encode` and the adapter `.encode` on the same random AND real-resid batches and asserts identical
+active TopK indices + values — it PASSES (Jaccard 1.0 per row, max abs diff 6e-6 / 7.6e-5, cosine 1.0),
+while the alternative `apply_b_dec_to_input=False` FAILS the same check (only ~7% index overlap, cosine
+0.139). An earlier version of this adapter used `=False` and produced `sae_top_1` 0.667; that was an
+**adapter artifact** (different latents firing), now corrected. The fidelity dict is persisted to
+`saebench_adapter_verify.json` (traceability).
+
+**Result — honest (R4):** the budget-trained custom SAE scores **`sae_top_1` = 0.670** (encode-verified;
+the buggy pre-fix run reported 0.667), **below** the
 Gemma Scope reference (0.767) **and below its own residual baseline (0.688)**. In other words, on this
 single-dataset top-1 sparse probe the custom SAE's single best feature does **not** beat the raw residual
 stream's best neuron — the **opposite** of repro-003, where the canonical Gemma Scope SAE (0.767) clearly
 beat the same baseline (0.688). The residual baseline here (0.688) is essentially identical to repro-003's
 (0.688), as it must be (the baseline does not depend on the SAE), which confirms the eval is sound and the
-comparison apples-to-apples. The full-feature accuracies match too (custom 0.953 / 0.965 vs reference
+comparison apples-to-apples. The full-feature accuracies match too (custom 0.950 / 0.965 vs reference
 0.964 / 0.965). This below-baseline outcome is the expected consequence of the modest ~10M-token training
 budget (reconstruction VE 0.51 vs Gemma Scope's 0.80): a weaker SAE concentrates less of the
 profession signal into a single top feature. It is reported as-is, not hidden — beating (or here, failing
@@ -290,10 +303,10 @@ L12 readout of this profession distinction.
 
 Phases 1–5 are complete; Phase 6 (this write-up) consolidates them. The Control-B steering sweep was
 recalibrated (`ctrl-steer-v2`) into a discriminating, honestly-inconclusive result, and the deferred
-Phase-3 SAEBench-on-custom-SAE item is now **closed**: a `sparsify→sae_lens.TopKSAE` adapter (ADR-0007)
-ran the full sparse_probing eval on the custom SAE (`sae_top_1` 0.667 — below Gemma Scope's 0.767 and
-below its own residual baseline 0.688, the expected consequence of the budget training; transcoder N/A
-per R3). **Remaining possible follow-ups** (not done): scaling SAEBench to the full 8-dataset suite, and a
+Phase-3 SAEBench-on-custom-SAE item is now **closed**: a `sparsify→sae_lens.TopKSAE` adapter (ADR-0007),
+with an encode-fidelity check that proves it reproduces sparsify's `coder.encode` exactly, ran the full
+sparse_probing eval on the custom SAE (`sae_top_1` 0.670 — below Gemma Scope's 0.767 and below its own
+residual baseline 0.688, the expected consequence of the budget training; transcoder N/A per R3). **Remaining possible follow-ups** (not done): scaling SAEBench to the full 8-dataset suite, and a
 multi-layer (cross-component) circuit. Open questions/risks: PHASE1_RETROSPECTIVE.md.
 
 ## Reproducibility & cost

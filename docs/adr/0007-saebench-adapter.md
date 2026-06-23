@@ -1,9 +1,45 @@
 # ADR 0007: sparsify -> sae_lens adapter for SAEBench on the custom SAE
 
-- Status: accepted. Resolves the Phase-3 deferred item ("SAEBench on the custom coders was SAE-only +
-  needs a sae_lens adapter => deferred"). Implements the adapter and runs the full SAEBench
-  sparse_probing eval on the custom SAE.
+- Status: accepted (AMENDED 2026-06-23 — `apply_b_dec_to_input` corrected from False to True after a QC
+  finding; see "Correction" below). Resolves the Phase-3 deferred item ("SAEBench on the custom coders
+  was SAE-only + needs a sae_lens adapter => deferred"). Implements the adapter and runs the full
+  SAEBench sparse_probing eval on the custom SAE.
 - Date: 2026-06-23
+
+## Correction (2026-06-23): apply_b_dec_to_input was wrong (False -> True)
+
+The original decision below set `apply_b_dec_to_input=False` on the premise that "sparsify's TopK encode
+does not subtract a decoder bias from the input." **That premise is factually wrong.** The installed
+sparsify `SparseCoder.encode` (read verbatim via `probe_sparsify_encode`, E4) is:
+
+```python
+def encode(self, x):
+    if not self.cfg.transcode:
+        x = x - self.b_dec          # <-- non-transcode SAEs DO subtract b_dec
+    return fused_encoder(x, self.encoder.weight, self.encoder.bias, self.cfg.k, self.cfg.activation)
+```
+
+The coder under test has `cfg.transcode=False`, so sparsify's true encode is `(x − b_dec) @ W_encᵀ + b_enc`
+(b_dec norm ≈ 90.7 — a large per-latent pre-activation shift), while the buggy adapter computed
+`x @ W_encᵀ + b_enc`. That shift changes WHICH TopK latents fire — exactly what sparse_probing consumes —
+so the v1 number (`sae_top_1` 0.6668) was an **adapter artifact**, not the SAE's real number.
+
+**Fix:** `apply_b_dec_to_input=True`. b_dec is already copied into the sae_lens SAE, so sae_lens now
+performs the identical `(x − b_dec)` shift. This is verified, not assumed: the new ENCODE-FIDELITY check in
+`verify_saebench_adapter` (persisted to `saebench_adapter_verify.json`) runs BOTH the real sparsify
+`coder.encode` and the adapter `.encode` on the same random AND real-resid batches and asserts identical
+active TopK indices + values within tolerance. With `=True` it PASSES (Jaccard 1.0 every row, max abs diff
+6e-6 / 7.6e-5, cosine 1.0); the buggy `=False` variant FAILS the same check (Jaccard ≈ 0.07, cosine 0.139).
+This fidelity assertion — not the eval-config matching — is the **real correctness evidence** for the adapter,
+and is the check that would have caught the bug at pre-flight.
+
+**Corrected result:** `sae_top_1` **0.670** (vs the buggy 0.667). The conclusion is UNCHANGED and now real:
+still below Gemma Scope 0.767 and below the residual baseline 0.688 — the honest negative stands, encode-verified.
+The b_dec fix moved the number only +0.003 because a top-1 best-single-feature probe is robust to which of
+the (near-equivalent) budget-SAE latents win; the bug was nonetheless real and could have changed the result.
+
+The rest of this ADR is the original v1 reasoning, retained for history; read `apply_b_dec_to_input=False`
+below as **superseded by the correction above**.
 
 ## Context
 
@@ -34,10 +70,14 @@ exact encode/decode semantics + TopK behaviour it expects, the config-from-metad
 and no risk of a hand-rolled `encode` diverging from sparsify's. Weight map (verified):
 `W_enc = encoder.weight.T`, `b_enc = encoder.bias`, `W_dec = W_dec`, `b_dec = b_dec`.
 
-### `apply_b_dec_to_input=False`
-sparsify's TopK encode does **not** subtract a decoder bias from the input before encoding, so the
-adapter sets `apply_b_dec_to_input=False` to match sparsify's forward exactly (a wrong choice here would
-silently change which latents fire). `normalize_activations="none"` for the same fidelity reason.
+### `apply_b_dec_to_input=False`  — SUPERSEDED (see "Correction" above; the correct value is True)
+~~sparsify's TopK encode does **not** subtract a decoder bias from the input before encoding, so the
+adapter sets `apply_b_dec_to_input=False` to match sparsify's forward exactly~~ — this premise is WRONG.
+sparsify's non-transcode `encode` DOES subtract b_dec (`if not self.cfg.transcode: x = x - self.b_dec`),
+so the correct setting is `apply_b_dec_to_input=True`. The original note that "a wrong choice here would
+silently change which latents fire" was exactly right about the risk — and the wrong choice was made; the
+encode-fidelity check now guards it. `normalize_activations="none"` is unaffected (sparsify does not
+normalize activations) and remains correct.
 
 ### float32 adapter weights
 The coders are bf16 on disk; the adapter casts to float32 for the eval. This keeps the probe numerically
@@ -69,11 +109,16 @@ reconstruction axis already being SAE-only.
 - (+) The deferred SAEBench-on-custom-SAE item is closed with a real, comparable number; the adapter
   (`_sparsify_to_topk_sae`) is reusable for other SAEBench evals on sparsify coders.
 - (+) A cheap pre-flight (`verify_saebench_adapter`) proves load + k-enforcement + SAEBench acceptance
-  before paying for the full run (it confirmed k=64 exactly, all 4 weights loaded, SAEBench accepts).
-- (-) Honest result: the budget-trained custom SAE scores `sae_top_1` **0.667**, **below** Gemma Scope's
-  0.767 *and* below its own residual baseline (0.688) — i.e. on this single-dataset top-1 probe the
-  budget SAE's best feature does **not** beat the raw residual, the opposite of repro-003. This is the
-  expected consequence of the ~10M-token budget (recon VE 0.51 vs 0.80), reported as-is (R4), not hidden.
+  + ENCODE-FIDELITY before paying for the full run (it confirmed k=64 exactly, all 4 weights loaded,
+  SAEBench accepts, and — post-correction — that the adapter's encode reproduces sparsify's `coder.encode`
+  exactly: same TopK indices, max abs diff 6e-6/7.6e-5, cosine 1.0; the buggy False variant fails this).
+  The fidelity check is the real adapter-correctness evidence and is persisted to
+  `saebench_adapter_verify.json`.
+- (-) Honest result (CORRECTED, encode-verified): the budget-trained custom SAE scores `sae_top_1`
+  **0.670** (the buggy v1 reported 0.667), **below** Gemma Scope's 0.767 *and* below its own residual
+  baseline (0.688) — i.e. on this single-dataset top-1 probe the budget SAE's best feature does **not**
+  beat the raw residual, the opposite of repro-003. This is the expected consequence of the ~10M-token
+  budget (recon VE 0.51 vs 0.80), reported as-is (R4), not hidden.
 - (-) Minor: a few of the budget SAE's decoder rows drift up to ~0.07 off unit-norm (mean norm ≈ 1.004),
   so `check_decoder_norms` warns; it does not raise and the eval proceeds. Noted for honesty.
 - One L4 run (~$0.5) + cheap E4 probes/pre-flight (~$0.2). Changing the eval dataset/metric is Gate 4.
