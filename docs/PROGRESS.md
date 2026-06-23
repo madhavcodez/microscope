@@ -43,7 +43,14 @@ finding (Phases 1-5 + abstract); README refreshed.
 - ~~Calibrated Control-B steering sweep~~ DONE 2026-06-23 (ctrl-steer-v2): neutral prompt + finer grid =>
   discriminating, honestly-inconclusive (dom matches/slightly beats SAE, CI incl 0).
 - sparsify->sae_lens adapter for the full SAEBench suite on the custom coders (Phase-3 SAEBench was SAE-only).
-- Stronger auto-interp scorer (the near-chance bottleneck throughout).
+- Stronger auto-interp scorer (the near-chance bottleneck throughout): ATTEMPTED 2026-06-23 with a LOCAL
+  Qwen2.5-7B-Instruct (ai-g2-7b-ATTEMPT). BLOCKED, no result — delphi keeps the Gemma base model resident
+  on the GPU through scoring, leaving only ~16/22 GiB free; vLLM's startup guard rejects max_memory 0.9
+  (19.83>16.05 GiB) and 0.5 underfits the 7B (~14.3 GiB weights + KV cache). Not an OOM; no memory
+  fraction works while the base model is resident. Stopped after 2 startup failures (~$0.15, retry cap).
+  3B head-to-head UNCHANGED + remains the reported result; scorer-strength question still OPEN. Code now
+  parameterizes scorer_model + max_memory and scorer-tags the output json (no clobber). FIX (needs a Gate):
+  free the base model from cuda before scoring (split cache vs score into two GPU calls) or use a >24 GiB GPU.
 - Multi-layer (cross-component) circuit via sparse-feature-circuits.
 
 ## Phase 3 pre-registration (R3 — COMMITTED 2026-06-22 BEFORE any eval run; do not change post-hoc)
@@ -237,3 +244,31 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
     metric/concept are unchanged vs ADR-0005 (only prompt + coef grid + reporting changed); (d) the CI
     [-0.25,+0.125] includes 0 => 'inconclusive' label is correct (R4). A re-run with the same seed
     should reproduce (E1), modulo any nondeterminism in CUDA sampling.
+- 2026-06-23 (coder): STRONGER-SCORER attempt for the auto-interp head-to-head (the near-chance
+  bottleneck). Tried a LOCAL Qwen2.5-7B-Instruct on auto_interp_custom for the SAE coder; STOPPED with
+  NO RESULT after 2 GPU startup failures (retry cap; ~$0.15, both died at vLLM engine init before any
+  scoring). The 3B head-to-head is UNCHANGED and remains the reported Phase-3 result (R4: the
+  scorer-strength question is still open, not answered).
+  - DIAGNOSIS (not an OOM): delphi caches activations with the Gemma-2-2B base model and then scores
+    with a vLLM scorer in ONE process WITHOUT freeing the base model from the GPU, so at scorer startup
+    only ~16/22 GiB is free. vLLM's request_memory guard rejects gpu_memory_utilization 0.9
+    (ValueError: 19.83 GiB requested > 16.05 GiB free); 0.5 underfits the 7B's ~14.3 GiB weights + KV
+    cache + CUDA graphs. No max_memory fraction satisfies both while the base model is resident. The 3B
+    (~6 GiB) coexists with it, which is why ai-g2 ran. E4: delphi's GPU lifecycle differs from the
+    "base model freed after caching" assumption in the old code comment (now corrected).
+  - CODE (infra/modal_app.py auto_interp_custom, backward-compatible, CPU py_compile + ruff clean on my
+    lines): (1) added `max_memory: float = 0.5` param (was hard-coded 0.5) so the vLLM budget is tunable
+    for the eventual fix; (2) anti-clobber output filename — derive a scorer_tag from scorer_model; the
+    default 3B writes the historical autointerp_<tag>.json, a non-default scorer writes
+    autointerp_<tag>_<scorer_tag>.json (verified: 3B->autointerp_sae.json, 7B->autointerp_sae_7b.json),
+    so a future 7B run will NOT overwrite the 3B results on the volume; (3) logged seed=0 + scorer_tag +
+    max_memory into the result dict (E3); (4) corrected the docstring + comment to document the KNOWN
+    BLOCKER honestly (R4) instead of the wrong "base model freed" claim. No production scorer switch (still
+    local, C1). Updated EXPERIMENTS.md (ai-g2-7b-ATTEMPT row, label inconclusive(no result), no fake
+    scores per R5), REPORT.md (Phase-3 "Scorer-strength check" note), PROGRESS.md.
+  - HANDOFF / tester: CPU-verifiable parts only. Verify (a) py_compile infra/modal_app.py; (b) the
+    filename derivation: scorer_model="Qwen/Qwen2.5-3B-Instruct" -> out_suffix="" (autointerp_<tag>.json);
+    any other scorer -> "_<scorer_tag>" (7B -> _7b); (c) the 3B results on the volume are untouched
+    (autointerp_sae.json/autointerp_tc.json still present, scorer=Qwen2.5-3B); (d) no fabricated 7B
+    scores anywhere in the docs (R5). The 7B run itself is NOT reproducible until the base-model-free fix
+    lands — it is a documented Gate (free base model from cuda before scoring, or a >24 GiB GPU).

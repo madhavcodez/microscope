@@ -126,6 +126,24 @@ one. **We can neither confirm nor refute the "transcoders Pareto-dominate SAEs" 
 budget/scorer regime** — a valid, pre-registered outcome (R4). The scorer-*independent* signal is pursued
 in Phase 4 (randomized-model probing gap).
 
+#### Scorer-strength check (2026-06-23) — did a stronger local scorer move the bottleneck?
+
+To test whether the near-chance auto-interp scores are caused by the weak 3B scorer (the central
+bottleneck), the head-to-head was re-attempted with a stronger **local** scorer, Qwen2.5-7B-Instruct
+(no paid API, C1). **The 7B scorer could not be run on the L4 and produced no scores**, so the Phase-3
+verdict above is **unchanged** (the reported numbers remain the 3B run). The blocker is not a true OOM
+but a GPU-memory-lifecycle limitation in delphi: it caches activations with the Gemma-2-2B base model
+and then scores with a vLLM scorer **in the same process without freeing the base model from the GPU**,
+so at scorer startup only ~16 of 22 GiB is free. vLLM's startup guard rejects `gpu_memory_utilization`
+≥ ~0.7 (19.83 > 16.05 GiB free), while the 7B's ~14.3 GiB weights plus KV cache and CUDA graphs need
+~16–18 GiB — no memory fraction satisfies both while the base model is resident (two startup failures
+at 0.5 and 0.9; stopped per the retry cap). The 3B scorer (~6 GiB) coexists with the resident base
+model, which is why it ran. **So the scorer-strength question is still open, not answered** (`ai-g2-7b-ATTEMPT`):
+moving past the bottleneck needs the base model freed from CUDA before scoring (split caching and
+scoring into two GPU calls) or a >24 GiB GPU — a deferred follow-up, not a result. The auto-interp code
+now accepts a configurable scorer and writes a scorer-tagged output file so a future stronger-scorer run
+will not clobber the 3B results.
+
 ## Phase 4 — controls (the differentiator)
 
 ### Control A — randomized-model control (multi-axis, ADR-0005)

@@ -1001,12 +1001,25 @@ def recon_eval(run_name: str, kind: str, layer: int = 12, n_docs: int = 96, seq_
     volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=5400, retries=0,
 )
 def auto_interp_custom(run_name: str, layer: int = 12, max_latents: int = 100,
-                       scorer_model: str = "Qwen/Qwen2.5-3B-Instruct") -> dict:
+                       scorer_model: str = "Qwen/Qwen2.5-3B-Instruct",
+                       max_memory: float = 0.5) -> dict:
     """Phase 3: delphi auto-interp on a CUSTOM sparsify-trained dict (sparsify branch, local checkpoint).
 
     delphi routes to its gemma-scope loader if 'gemma' appears in sparse_model, so the checkpoint is
-    copied to a gemma-free path first. Same local Qwen2.5-3B scorer + seed + sample as repro-004 so the
-    SAE and transcoder runs are paired (max_latents + seed fixed => same latent selection per coder)."""
+    copied to a gemma-free path first. Same LOCAL scorer + seed + sample as repro-004 so the SAE and
+    transcoder runs are paired (max_latents + seed fixed => same latent selection per coder). The
+    scorer is configurable and a non-default scorer writes autointerp_<tag>_<scorer_tag>.json so it
+    does NOT clobber the 3B results (C1: local scorer only).
+
+    KNOWN BLOCKER (2026-06-23, attempted Qwen2.5-7B): on an L4 the 7B scorer cannot START here.
+    delphi runs caching (the Gemma-2-2B base model) and scoring (vLLM scorer) in ONE process and
+    does not free the base model from the GPU between phases, so at vLLM startup only ~16/22 GiB is
+    free. vLLM's request_memory guard rejects gpu_memory_utilization>=~0.7 up front, while the 7B's
+    ~14.3 GiB weights + KV cache + CUDA graphs need ~16-18 GiB -> no max_memory fraction satisfies
+    both while the base model is resident. Two failed startup attempts (0.5: weights overflow the
+    ~11 GiB budget; 0.9: 19.83 GiB requested > 16.05 GiB free). FIX (deferred to a Gate): free the
+    base model from cuda before scoring (split cache vs score into two GPU calls, or a bigger GPU).
+    The 3B scorer (~6 GiB weights) coexists with the resident base model and works (ai-g2)."""
     import asyncio
     import glob
     import os
@@ -1023,6 +1036,12 @@ def auto_interp_custom(run_name: str, layer: int = 12, max_latents: int = 100,
     # Copy to a gemma-FREE path so delphi uses the sparsify loader, not the gemma-scope loader.
     safe_src = f"/root/outputs/coders/{run_name}"
     tag = "sae" if run_name.endswith("-sae") else "tc"
+    # Scorer tag keeps multiple-scorer results from clobbering each other on the volume. The default
+    # 3B scorer writes the historical autointerp_<tag>.json (backward-compatible); any non-default
+    # scorer (e.g. the stronger 7B) writes autointerp_<tag>_<scorer_tag>.json so both coexist.
+    _scorer_short = scorer_model.rsplit("/", 1)[-1].lower()
+    scorer_tag = "3b" if "3b" in _scorer_short else ("7b" if "7b" in _scorer_short else _scorer_short)
+    out_suffix = "" if scorer_model == "Qwen/Qwen2.5-3B-Instruct" else f"_{scorer_tag}"
     safe_dst = f"/root/coder_{tag}"
     if not os.path.isdir(safe_dst):
         shutil.copytree(safe_src, safe_dst)
@@ -1058,7 +1077,11 @@ def auto_interp_custom(run_name: str, layer: int = 12, max_latents: int = 100,
         max_latents=max_latents,
         filter_bos=True,
         num_gpus=1,
-        max_memory=0.5,
+        # vLLM gpu_memory_utilization for the scorer. 0.5 fits the 3B (~6GB weights). The 7B does
+        # NOT start here regardless of this value: the Gemma base model stays resident on the GPU
+        # through scoring (~6 GiB), so only ~16/22 GiB is free and vLLM's startup guard + the 7B's
+        # KV-cache needs cannot both be met (see docstring KNOWN BLOCKER). Parameterized for a fix.
+        max_memory=max_memory,
         seed=0,
         verbose=False,
         hf_token=token,
@@ -1078,7 +1101,8 @@ def auto_interp_custom(run_name: str, layer: int = 12, max_latents: int = 100,
 
     act_re = re.compile(r'"activating":\s*(true|false)')
     pred_re = re.compile(r'"prediction":\s*(true|false)')
-    out: dict = {"run_name": run_name, "tag": tag, "scorer": scorer_model, "scores": {}}
+    out: dict = {"run_name": run_name, "tag": tag, "scorer": scorer_model,
+                 "scorer_tag": scorer_tag, "seed": 0, "max_memory": max_memory, "scores": {}}
     for scorer in ("detection", "fuzz"):
         sdir = Path.cwd() / "results" / name / "scores" / scorer
         files = glob.glob(str(sdir / "*"))
@@ -1102,7 +1126,7 @@ def auto_interp_custom(run_name: str, layer: int = 12, max_latents: int = 100,
         }
     out["latent_sample"] = sorted(out["scores"]["detection"].get("per_latent", []) and latent_ids)[:5]
     import json as _json
-    with open(f"/root/outputs/autointerp_{tag}.json", "w") as _fh:
+    with open(f"/root/outputs/autointerp_{tag}{out_suffix}.json", "w") as _fh:
         _json.dump(out, _fh)
     artifacts_vol.commit()
     print("AUTO-INTERP CUSTOM RESULT:", {k: (v if k != "scores" else {s: {kk: vv for kk, vv in d.items() if kk != 'per_latent'} for s, d in v.items()}) for k, v in out.items()})
