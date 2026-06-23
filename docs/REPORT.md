@@ -18,9 +18,15 @@ run in [EXPERIMENTS.md](EXPERIMENTS.md).
 MicroScope is a reproducible, honestly-evaluated mech-interp pipeline on Gemma-2-2B (run on Modal, ≤$30).
 It **reproduces** the Gemma Scope reference (reconstruction VE 0.80, SAEBench probing 0.767), then trains
 a custom SAE + skip-transcoder and asks whether transcoders beat SAEs on interpretability. That novel
-head-to-head is **inconclusive** — the local auto-interp scorer is near-chance and the $30 budget
-under-trains the coders, so neither wins with a confidence interval excluding zero. The value is in the
-**controls and the circuit**, which do *not* depend on the weak scorer: (1) a **randomized-model control**
+head-to-head is **scorer-dependent**: with the weak 3B local scorer it is **inconclusive** (both coders
+near-chance, neither delta's CI excludes zero), but re-running the same paired sample with a stronger
+**local** 7B scorer (on an A100-40GB) lifts every score well above chance and **flips the result — the
+skip-transcoder is significantly more interpretable on both detection (+0.053, CI [+0.016, +0.089]) and
+fuzzing (+0.059, CI [+0.019, +0.097])**, confirming the pre-registered "transcoders beat SAEs" direction
+on the interpretability axis (a full Pareto-dominance claim is still open since the transcoder's
+reconstruction was not cleanly isolable). The recurring near-chance was therefore a *scorer* artifact,
+not a coder limit. Beyond that, the load-bearing value is in the **controls and the circuit**, which do
+*not* depend on the scorer at all: (1) a **randomized-model control**
 shows the real-model SAE carries **model-learned structure beyond token statistics** (probing 0.933 vs
 0.861 random, paired CI [+0.033, +0.117]) — significant but *modest*, because most of the probing signal
 is token-level; (2) a **sparse feature circuit** of just **5–10 SAE features recovers 94–97%** of the
@@ -73,10 +79,10 @@ whether the interpretability is real.
 | Gemma Scope SAE reconstruction fidelity (VE/L0) | **reproduced** | repro-001, repro-002 |
 | SAE sparse-probing beats residual baseline | **reproduced** | repro-003 |
 | Auto-interp *pipeline* works on the pretrained SAE (local scorer) | **reproduced (method)** | repro-004 |
-| Auto-interp *absolute* detection/fuzz scores match the literature | **inconclusive** | scorer-size dependent (repro-004) |
+| Auto-interp *absolute* detection/fuzz scores are scorer-size dependent (near-chance at 3B, well above at 7B) | **reproduced (effect)** | repro-004 (3B near-chance) vs ai-g2-*-7b (7B: 0.61–0.69) |
 | Custom SAE + skip-transcoder trained on Gemma-2-2B (artifacts; no interp claim yet) | **novel (artifact)** | train-g2-sae, train-g2-tc |
 | Custom SAE reconstruction VE (own objective) | **novel** | recon-g2-sae (0.514) |
-| SAE-vs-skip-transcoder interpretability head-to-head | **inconclusive** | ai-g2-sae, ai-g2-tc (both Δ CIs include 0) |
+| SAE-vs-skip-transcoder interpretability head-to-head | **scorer-dependent: inconclusive at 3B, transcoder WINS at 7B (novel)** | ai-g2-sae/tc (3B, CIs incl 0) → ai-g2-sae-7b/tc-7b (7B: det Δ+0.053 CI[+0.016,+0.089], fuzz Δ+0.059 CI[+0.019,+0.097]) |
 | Randomized-model control — real SAE has structure beyond token stats | **conclusive** | ctrl-probe-real/random (paired gap +0.072, CI [+0.033,+0.117]) |
 | Steering control (B): SAE feature vs difference-of-means | **inconclusive** | ctrl-steer-v2 (both steer well within fluency: SAE +0.312, dom +0.375; Δ −0.062, CI [−0.25,+0.125]) |
 | Feature circuit — sparse + faithful (5–10 SAE features) | **conclusive (novel)** | circuit-g2-sae (top-5 = 94% of ceiling; beats random, CI excl 0) |
@@ -111,38 +117,57 @@ interpretability-vs-reconstruction; every SAE-vs-transcoder delta is reported wi
 | Axis | SAE | Skip-transcoder | Δ (TC−SAE), 95% bootstrap CI | Label |
 |---|---|---|---|---|
 | Reconstruction VE (own objective) | 0.514 (CI [0.507, 0.519]) | not cleanly isolable | — | SAE novel; TC limitation |
-| Auto-interp **detection** | 0.540 (n=58) | 0.539 (n=61) | −0.001, [−0.022, +0.022] | **inconclusive** |
-| Auto-interp **fuzzing** | 0.523 | 0.546 | +0.023, [−0.001, +0.047] | **inconclusive** |
+| Auto-interp **detection** (3B scorer) | 0.540 (n=58) | 0.539 (n=61) | −0.001, [−0.022, +0.022] | **inconclusive** |
+| Auto-interp **fuzzing** (3B scorer) | 0.523 | 0.546 | +0.023, [−0.001, +0.047] | **inconclusive** |
+| Auto-interp **detection** (7B scorer) | 0.607 (n=58) | 0.660 (n=60) | **+0.053, [+0.016, +0.089]** | **transcoder wins** |
+| Auto-interp **fuzzing** (7B scorer) | 0.631 | 0.690 | **+0.059, [+0.019, +0.097]** | **transcoder wins** |
 | SAEBench sparse_probing | resid-probing → SAE-only | N/A (transcoder) | — | SAE-side only (Phase 4 adapter) |
 
-**Verdict: INCONCLUSIVE.** Neither auto-interp delta's CI excludes zero, so we cannot say the
-skip-transcoder beats *or* loses to the SAE on interpretability at this scorer scale. Both coders sit
-near the 0.5 chance line — the bottleneck is the 3B local scorer (repro-004 showed the identical pattern
-for the *pretrained* Gemma Scope SAE: 0.544/0.529), not the coders. The reconstruction axis is SAE-only:
-the transcoder's own-objective reconstruction could not be cleanly isolated through external HF hooks
-(sparsify's transcode hookpoints), and sparsify's `ForwardOutput.fvu` measures input-reconstruction
-(inflated by the skip), so we do not report a transcoder reconstruction number rather than report a wrong
-one. **We can neither confirm nor refute the "transcoders Pareto-dominate SAEs" hypothesis in this
-budget/scorer regime** — a valid, pre-registered outcome (R4). The scorer-*independent* signal is pursued
-in Phase 4 (randomized-model probing gap).
+**Verdict: scorer-dependent — INCONCLUSIVE at the 3B scorer, but the skip-transcoder WINS once the
+scorer is strong enough (7B).** With the weak 3B local scorer neither auto-interp delta's CI excludes
+zero and both coders sit near the 0.5 chance line, so at that scale we could not separate them (the
+bottleneck is the *scorer*, not the coders — repro-004 showed the identical near-chance pattern for the
+*pretrained* Gemma Scope SAE, 0.544/0.529). Re-running the **same paired latent sample** with a stronger
+**local** Qwen2.5-7B scorer (resolved 2026-06-23; see below) lifts every score well above chance **and
+flips the head-to-head**: the skip-transcoder is significantly more interpretable than the SAE on **both**
+detection (+0.053, CI [+0.016, +0.089]) and fuzzing (+0.059, CI [+0.019, +0.097]) — both CIs now exclude
+zero (unpaired diff-of-means bootstrap, seed 0, 10k resamples, the same method as the 3B row). On the
+interpretability axis this **CONFIRMS the pre-registered "transcoders beat SAEs" direction** (R4). The
+reconstruction axis remains SAE-only: the transcoder's own-objective reconstruction could not be cleanly
+isolated through external HF hooks (sparsify's transcode hookpoints), and sparsify's `ForwardOutput.fvu`
+measures input-reconstruction (inflated by the skip), so we report no transcoder reconstruction number
+rather than a wrong one — meaning a full *Pareto-dominance* claim (interpretability **and**
+reconstruction jointly) is still not closed, only the interpretability half is. The scorer-*independent*
+signal is pursued in Phase 4 (randomized-model probing gap).
 
-#### Scorer-strength check (2026-06-23) — did a stronger local scorer move the bottleneck?
+#### Scorer-strength check (2026-06-23) — did a stronger local scorer move the bottleneck? (RESOLVED — yes)
 
-To test whether the near-chance auto-interp scores are caused by the weak 3B scorer (the central
-bottleneck), the head-to-head was re-attempted with a stronger **local** scorer, Qwen2.5-7B-Instruct
-(no paid API, C1). **The 7B scorer could not be run on the L4 and produced no scores**, so the Phase-3
-verdict above is **unchanged** (the reported numbers remain the 3B run). The blocker is not a true OOM
-but a GPU-memory-lifecycle limitation in delphi: it caches activations with the Gemma-2-2B base model
-and then scores with a vLLM scorer **in the same process without freeing the base model from the GPU**,
-so at scorer startup only ~16 of 22 GiB is free. vLLM's startup guard rejects `gpu_memory_utilization`
-≥ ~0.7 (19.83 > 16.05 GiB free), while the 7B's ~14.3 GiB weights plus KV cache and CUDA graphs need
-~16–18 GiB — no memory fraction satisfies both while the base model is resident (two startup failures
-at 0.5 and 0.9; stopped per the retry cap). The 3B scorer (~6 GiB) coexists with the resident base
-model, which is why it ran. **So the scorer-strength question is still open, not answered** (`ai-g2-7b-ATTEMPT`):
-moving past the bottleneck needs the base model freed from CUDA before scoring (split caching and
-scoring into two GPU calls) or a >24 GiB GPU — a deferred follow-up, not a result. The auto-interp code
-now accepts a configurable scorer and writes a scorer-tagged output file so a future stronger-scorer run
-will not clobber the 3B results.
+The near-chance 3B auto-interp scores throughout this project raised an obvious question: is the
+near-chance a property of the *coders*, or just of the *weak 3B local scorer*? An earlier attempt to
+answer it with a stronger **local** Qwen2.5-7B scorer (`ai-g2-7b-ATTEMPT`) was blocked on the L4: delphi
+caches activations with the Gemma-2-2B base model and then scores with a vLLM scorer **in the same
+process without freeing the base model from the GPU**, so on the 24 GiB L4 only ~16 GiB is free at
+scorer startup and vLLM's startup guard cannot fit the 7B (~14.3 GiB weights + KV cache + CUDA graphs)
+next to the resident base model (not a runtime OOM — a startup memory-accounting failure). The 3B
+scorer (~6 GiB) fit, which is why ai-g2 ran.
+
+**Resolution: run the 7B where the base model and the 7B coexist — an A100-40GB.** A thin GPU wrapper
+(`auto_interp_custom_a100`, `gpu="A100-40GB"`, `gpu_memory_utilization=0.65`) shares the same delphi
+config, seed, and paired latent sample as the L4 3B path; only the scorer and GPU change. Both 7B runs
+started cleanly (the 7B's 14.29 GiB of weights loaded alongside the ~6 GiB resident base model on the
+40 GiB card) and completed in ~8 min each for ~$0.6 total GPU (well under budget).
+
+The answer is **yes, the scorer was the bottleneck**. Every score rises well above the 0.5 chance line:
+detection SAE 0.540 → **0.607**, TC 0.539 → **0.660**; fuzzing SAE 0.523 → **0.631**, TC 0.546 →
+**0.690**. And it **changes the head-to-head conclusion**: under the 3B scorer both deltas were
+inconclusive (CIs included 0), but under the 7B scorer the skip-transcoder is significantly more
+interpretable on **both** metrics — detection TC−SAE **+0.053, CI [+0.016, +0.089]** and fuzzing TC−SAE
+**+0.059, CI [+0.019, +0.097]**, both CIs excluding 0 (same unpaired diff-of-means bootstrap, seed 0,
+10k resamples; recompute via `scripts/headtohead_autointerp.py`). So the project's recurring
+"scorer-limited near-chance" caveat was real, and lifting it confirms the pre-registered direction:
+**the transcoder is the more interpretable coder** (`ai-g2-sae-7b` / `ai-g2-tc-7b`). The auto-interp
+code writes a scorer-tagged output file, so the 7B results sit alongside the 3B results without
+clobbering them.
 
 ## Phase 4 — controls (the differentiator)
 

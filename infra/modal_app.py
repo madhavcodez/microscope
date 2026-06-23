@@ -996,30 +996,30 @@ def recon_eval(run_name: str, kind: str, layer: int = 12, n_docs: int = 96, seq_
     return out
 
 
-@app.function(
-    image=pkg_image, gpu="L4", secrets=[HF_SECRET],
-    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=5400, retries=0,
-)
-def auto_interp_custom(run_name: str, layer: int = 12, max_latents: int = 100,
-                       scorer_model: str = "Qwen/Qwen2.5-3B-Instruct",
-                       max_memory: float = 0.5) -> dict:
-    """Phase 3: delphi auto-interp on a CUSTOM sparsify-trained dict (sparsify branch, local checkpoint).
+def _auto_interp_impl(run_name: str, layer: int = 12, max_latents: int = 100,
+                      scorer_model: str = "Qwen/Qwen2.5-3B-Instruct",
+                      max_memory: float = 0.5) -> dict:
+    """Shared delphi auto-interp body for a CUSTOM sparsify-trained dict (sparsify branch, local ckpt).
 
-    delphi routes to its gemma-scope loader if 'gemma' appears in sparse_model, so the checkpoint is
-    copied to a gemma-free path first. Same LOCAL scorer + seed + sample as repro-004 so the SAE and
-    transcoder runs are paired (max_latents + seed fixed => same latent selection per coder). The
-    scorer is configurable and a non-default scorer writes autointerp_<tag>_<scorer_tag>.json so it
-    does NOT clobber the 3B results (C1: local scorer only).
+    GPU-agnostic core called by the L4 wrapper :func:`auto_interp_custom` (3B scorer) and the
+    A100-40GB wrapper :func:`auto_interp_custom_a100` (stronger 7B scorer). delphi routes to its
+    gemma-scope loader if 'gemma' appears in sparse_model, so the checkpoint is copied to a gemma-free
+    path first. Same LOCAL scorer + seed + sample as repro-004 so the SAE and transcoder runs are
+    paired (max_latents + seed fixed => same latent selection per coder). The scorer is configurable
+    and a non-default scorer writes autointerp_<tag>_<scorer_tag>.json so it does NOT clobber the 3B
+    results (C1: local scorer only).
 
-    KNOWN BLOCKER (2026-06-23, attempted Qwen2.5-7B): on an L4 the 7B scorer cannot START here.
-    delphi runs caching (the Gemma-2-2B base model) and scoring (vLLM scorer) in ONE process and
-    does not free the base model from the GPU between phases, so at vLLM startup only ~16/22 GiB is
-    free. vLLM's request_memory guard rejects gpu_memory_utilization>=~0.7 up front, while the 7B's
-    ~14.3 GiB weights + KV cache + CUDA graphs need ~16-18 GiB -> no max_memory fraction satisfies
-    both while the base model is resident. Two failed startup attempts (0.5: weights overflow the
-    ~11 GiB budget; 0.9: 19.83 GiB requested > 16.05 GiB free). FIX (deferred to a Gate): free the
-    base model from cuda before scoring (split cache vs score into two GPU calls, or a bigger GPU).
-    The 3B scorer (~6 GiB weights) coexists with the resident base model and works (ai-g2)."""
+    GPU SIZING (resolved 2026-06-23). delphi runs caching (the Gemma-2-2B base model) and scoring
+    (a vLLM scorer) in ONE process and does NOT free the base model from the GPU between phases, so
+    at vLLM startup only (total - ~6 GiB base) is free for the scorer. Consequences:
+      * 3B scorer (~6 GiB weights): coexists with the resident base model on L4 (24 GiB) ->
+        :func:`auto_interp_custom` on gpu='L4', max_memory=0.5. This is the historical ai-g2 path.
+      * 7B scorer (~14.3 GiB weights + KV cache + CUDA graphs, ~16-18 GiB): does NOT fit on L4 next
+        to the resident base model (only ~16/22 GiB free; the earlier ai-g2-7b-ATTEMPT failed at
+        vLLM startup, not a runtime OOM). It DOES fit on an A100-40GB: ~6 GiB base + ~16-18 GiB
+        scorer of 40 GiB, so the vLLM startup guard passes at gpu_memory_utilization ~0.6-0.7
+        (~24-28 GiB of the 40 GiB budget; comfortably above the 7B's needs, below 40 minus base) ->
+        :func:`auto_interp_custom_a100` on gpu='A100-40GB', max_memory=0.65."""
     import asyncio
     import glob
     import os
@@ -1077,10 +1077,9 @@ def auto_interp_custom(run_name: str, layer: int = 12, max_latents: int = 100,
         max_latents=max_latents,
         filter_bos=True,
         num_gpus=1,
-        # vLLM gpu_memory_utilization for the scorer. 0.5 fits the 3B (~6GB weights). The 7B does
-        # NOT start here regardless of this value: the Gemma base model stays resident on the GPU
-        # through scoring (~6 GiB), so only ~16/22 GiB is free and vLLM's startup guard + the 7B's
-        # KV-cache needs cannot both be met (see docstring KNOWN BLOCKER). Parameterized for a fix.
+        # vLLM gpu_memory_utilization for the scorer. The Gemma base model stays resident through
+        # scoring (~6 GiB), so the usable budget is (total - ~6 GiB). 0.5 fits the 3B (~6 GiB) on L4.
+        # The 7B (~16-18 GiB) needs the A100-40GB wrapper with ~0.65 (see docstring GPU SIZING).
         max_memory=max_memory,
         seed=0,
         verbose=False,
@@ -1131,6 +1130,63 @@ def auto_interp_custom(run_name: str, layer: int = 12, max_latents: int = 100,
     artifacts_vol.commit()
     print("AUTO-INTERP CUSTOM RESULT:", {k: (v if k != "scores" else {s: {kk: vv for kk, vv in d.items() if kk != 'per_latent'} for s, d in v.items()}) for k, v in out.items()})
     return out
+
+
+@app.function(
+    image=pkg_image, gpu="L4", secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=5400, retries=0,
+)
+def auto_interp_custom(run_name: str, layer: int = 12, max_latents: int = 100,
+                       scorer_model: str = "Qwen/Qwen2.5-3B-Instruct",
+                       max_memory: float = 0.5) -> dict:
+    """L4 wrapper (the historical ai-g2 path): delphi auto-interp with the 3B local scorer.
+
+    The 3B scorer (~6 GiB) coexists with the resident Gemma base model on the L4's 24 GiB. For the
+    stronger 7B scorer use :func:`auto_interp_custom_a100` (40 GiB). See :func:`_auto_interp_impl`."""
+    return _auto_interp_impl(run_name, layer, max_latents, scorer_model, max_memory)
+
+
+@app.function(
+    image=pkg_image, gpu="A100-40GB", secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=5400, retries=0,
+)
+def auto_interp_custom_a100(run_name: str, layer: int = 12, max_latents: int = 100,
+                            scorer_model: str = "Qwen/Qwen2.5-7B-Instruct",
+                            max_memory: float = 0.65) -> dict:
+    """A100-40GB wrapper: delphi auto-interp with a STRONGER local scorer (default Qwen2.5-7B).
+
+    Resolves the ai-g2-7b-ATTEMPT blocker by giving the 7B room to start NEXT TO the resident Gemma
+    base model. Budget on 40 GiB: ~6 GiB base + ~16-18 GiB 7B (weights + KV cache + CUDA graphs); at
+    max_memory=0.65 vLLM reserves ~26 GiB, which clears its startup guard and the 7B's needs while
+    staying under (40 - base). Same delphi config/seed/sample as the L4 3B path so the SAE vs
+    transcoder runs stay paired and directly comparable to ai-g2 (only the scorer + GPU change).
+    Writes the scorer-tagged autointerp_<tag>_7b.json (no clobber of the 3B json). C1: local scorer
+    only (no paid API). See :func:`_auto_interp_impl` for the GPU-sizing rationale."""
+    return _auto_interp_impl(run_name, layer, max_latents, scorer_model, max_memory)
+
+
+@app.local_entrypoint()
+def autointerp_main(run_name: str, scorer_model: str = "Qwen/Qwen2.5-7B-Instruct",
+                    gpu: str = "a100", max_latents: int = 100, max_memory: float = 0.65,
+                    layer: int = 12) -> None:
+    """Drive a custom-coder auto-interp run on either GPU (config-driven; default = 7B on A100-40GB).
+
+    modal run infra/modal_app.py::autointerp_main --run-name train_gemma2_2b_l12-sae --gpu a100
+    --gpu a100 -> 7B scorer on A100-40GB (the scorer-strength resolution; max_memory ~0.65).
+    --gpu l4   -> routes to the L4 3B wrapper (historical ai-g2; pass --scorer-model Qwen/Qwen2.5-3B-Instruct
+                  + --max-memory 0.5). max_latents <= 500 (RULES.md C3)."""
+    if max_latents > 500:
+        raise ValueError(f"max_latents={max_latents} exceeds the C3 cap of 500 (RULES.md).")
+    target = gpu.strip().lower()
+    if target in ("a100", "a100-40gb", "a100_40gb"):
+        fn = auto_interp_custom_a100
+    elif target == "l4":
+        fn = auto_interp_custom
+    else:
+        raise ValueError(f"Unknown gpu={gpu!r}; use 'a100' (A100-40GB, 7B scorer) or 'l4' (3B scorer).")
+    result = fn.remote(run_name=run_name, layer=layer, max_latents=max_latents,
+                       scorer_model=scorer_model, max_memory=max_memory)
+    print("FINAL AUTO-INTERP RESULT:", result)
 
 
 @app.function(

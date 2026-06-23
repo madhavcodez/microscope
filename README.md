@@ -25,16 +25,19 @@ project is **honest evaluation** — see [`docs/RULES.md`](docs/RULES.md).
 |---|---|---|
 | Reproduce Gemma Scope: reconstruction VE 0.80 / L0 83 | **reproduced** | `repro-001/002` |
 | Reproduce SAEBench sparse probing (0.767 vs 0.688 baseline) | **reproduced** | `repro-003` |
-| Auto-interp pipeline (local scorer) | **method reproduced**; scores near-chance | `repro-004` |
-| Custom SAE vs skip-transcoder interpretability head-to-head | **inconclusive** (scorer/budget) | `ai-g2-sae/tc` |
+| Auto-interp pipeline (local scorer) | **method reproduced**; 3B near-chance, **7B well above chance** | `repro-004`, `ai-g2-*-7b` |
+| Custom SAE vs skip-transcoder interpretability head-to-head | **scorer-dependent: inconclusive at 3B, transcoder WINS at 7B (novel)** | `ai-g2-sae/tc` (3B) → `ai-g2-sae-7b/tc-7b` |
 | Randomized-model control: real-model SAE > randomized-model SAE | **conclusive** (+0.072, CI [0.033, 0.117]) | `ctrl-probe-*` |
 | Steering: SAE feature vs difference-of-means | **inconclusive** (both steer; dom matches SAE, CI incl 0) | `ctrl-steer-v2` |
 | Feature circuit: 5–10 SAE features = 94–97% of full accuracy | **conclusive (novel)** | `circuit-g2-sae` |
 
-**Honest bottom line:** the novel transcoder-vs-SAE comparison didn't resolve under a $30 budget + a weak
-local scorer, but two **scorer-independent** results are conclusive — the SAE encodes real structure
-beyond token statistics (modestly; most probing signal is token-level), and a **sparse feature circuit**
-faithfully mediates a concept. Full narrative: [`docs/REPORT.md`](docs/REPORT.md).
+**Honest bottom line:** the novel transcoder-vs-SAE comparison was inconclusive under the weak 3B scorer,
+but a stronger **local** 7B scorer (on an A100-40GB) lifts every score above chance and resolves it — the
+**skip-transcoder is significantly more interpretable** on both auto-interp metrics (detection +0.053,
+CI [+0.016, +0.089]; fuzzing +0.059, CI [+0.019, +0.097]), confirming the pre-registered direction on the
+interpretability axis. Two **scorer-independent** results are also conclusive — the SAE encodes real
+structure beyond token statistics (modestly; most probing signal is token-level), and a **sparse feature
+circuit** faithfully mediates a concept. Full narrative: [`docs/REPORT.md`](docs/REPORT.md).
 
 ## Install
 
@@ -63,8 +66,13 @@ modal run infra/modal_app.py::train_main --config experiments/configs/train_gemm
 modal run infra/modal_app.py::train_main --config experiments/configs/train_gemma2_2b_l12.yaml --kind transcoder
 
 # Phase 3 — head-to-head (auto-interp + reconstruction)
+# 3B scorer on L4 (the historical near-chance result):
 modal run infra/modal_app.py::auto_interp_custom --run-name train_gemma2_2b_l12-sae
 modal run infra/modal_app.py::auto_interp_custom --run-name train_gemma2_2b_l12-transcoder
+# Stronger 7B scorer on A100-40GB (resolves the near-chance bottleneck; transcoder wins):
+modal run infra/modal_app.py::autointerp_main --run-name train_gemma2_2b_l12-sae --gpu a100
+modal run infra/modal_app.py::autointerp_main --run-name train_gemma2_2b_l12-transcoder --gpu a100
+python scripts/headtohead_autointerp.py --dir artifacts_pull   # recompute the head-to-head + CIs
 modal run infra/modal_app.py::recon_eval --run-name train_gemma2_2b_l12-sae --kind sae
 
 # Phase 4 — controls

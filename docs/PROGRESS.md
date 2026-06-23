@@ -1,11 +1,14 @@
 # PROGRESS
 
 ## Current phase
-**PHASES 1-6 COMPLETE (2026-06-22); Control-B steering recalibrated 2026-06-23.** CORE PROJECT DONE:
-reproduce -> train -> head-to-head -> controls -> circuit -> write-up. Spend ≈ $11 of $30. Two CONCLUSIVE scorer-independent results (randomized-model
-control + sparse feature circuit); the novel SAE-vs-transcoder head-to-head is INCONCLUSIVE (honest,
-scorer/budget-limited). Repo clean: ruff + 170 tests pass, pip install -e . + CLI work. REPORT.md is the
-finding (Phases 1-5 + abstract); README refreshed.
+**PHASES 1-6 COMPLETE (2026-06-22); Control-B steering recalibrated + 7B scorer head-to-head RESOLVED 2026-06-23.**
+CORE PROJECT DONE: reproduce -> train -> head-to-head -> controls -> circuit -> write-up. Spend ≈ $11.6 of $30
+(7B A100 unit ≈ $0.6). THREE conclusive results now: two scorer-independent (randomized-model control +
+sparse feature circuit) PLUS the novel SAE-vs-transcoder head-to-head, which RESOLVED once a strong-enough
+scorer was used — inconclusive at the 3B scorer (both CIs incl 0) but the **skip-transcoder WINS at the 7B
+scorer** on both detection (Δ+0.053 CI[+0.016,+0.089]) and fuzzing (Δ+0.059 CI[+0.019,+0.097]); the
+recurring near-chance was a SCORER artifact (3B), not a coder limit (ai-g2-sae-7b/tc-7b). Repo clean: ruff
++ 170 tests pass, pip install -e . + CLI work. REPORT.md is the finding (Phases 1-5 + abstract); README refreshed.
 
 - **Phase 2 DONE:** sparsify wrapper (SAE=transcode/skip F/F, transcoder T/T, shared width/k) + Pythia smokes
   + both Gemma-2-2B custom coders trained @ L12 (width 16384, k=64, ~10M tokens, bf16): train-g2-sae,
@@ -43,14 +46,18 @@ finding (Phases 1-5 + abstract); README refreshed.
 - ~~Calibrated Control-B steering sweep~~ DONE 2026-06-23 (ctrl-steer-v2): neutral prompt + finer grid =>
   discriminating, honestly-inconclusive (dom matches/slightly beats SAE, CI incl 0).
 - sparsify->sae_lens adapter for the full SAEBench suite on the custom coders (Phase-3 SAEBench was SAE-only).
-- Stronger auto-interp scorer (the near-chance bottleneck throughout): ATTEMPTED 2026-06-23 with a LOCAL
-  Qwen2.5-7B-Instruct (ai-g2-7b-ATTEMPT). BLOCKED, no result — delphi keeps the Gemma base model resident
-  on the GPU through scoring, leaving only ~16/22 GiB free; vLLM's startup guard rejects max_memory 0.9
-  (19.83>16.05 GiB) and 0.5 underfits the 7B (~14.3 GiB weights + KV cache). Not an OOM; no memory
-  fraction works while the base model is resident. Stopped after 2 startup failures (~$0.15, retry cap).
-  3B head-to-head UNCHANGED + remains the reported result; scorer-strength question still OPEN. Code now
-  parameterizes scorer_model + max_memory and scorer-tags the output json (no clobber). FIX (needs a Gate):
-  free the base model from cuda before scoring (split cache vs score into two GPU calls) or use a >24 GiB GPU.
+- ~~Stronger auto-interp scorer (the near-chance bottleneck throughout)~~ RESOLVED 2026-06-23
+  (ai-g2-sae-7b / ai-g2-tc-7b). The L4 ATTEMPT (ai-g2-7b-ATTEMPT) was blocked because delphi keeps the
+  Gemma base model resident through scoring (only ~16/22 GiB free, 7B can't start). FIX = run the 7B on an
+  **A100-40GB** where base (~6 GiB) + 7B (~14.3 GiB) coexist: new `auto_interp_custom_a100` wrapper
+  (gpu="A100-40GB", max_memory=0.65) + `autointerp_main` entrypoint (--gpu a100|l4). Both 7B runs started
+  cleanly + completed (~8 min each, ~$0.6 total). RESULT: every score rises WELL above 3B near-chance
+  (det SAE 0.540->0.607, TC 0.539->0.660; fuzz SAE 0.523->0.631, TC 0.546->0.690) => the near-chance was a
+  SCORER artifact, not a coder limit. HEAD-TO-HEAD FLIPS: 3B both CIs incl 0 (inconclusive) -> 7B
+  transcoder WINS on BOTH (det TC-SAE +0.053 CI[+0.016,+0.089]; fuzz +0.059 CI[+0.019,+0.097], both excl 0;
+  same unpaired diff-of-means bootstrap seed0/10k as ai-g2). Confirms the pre-registered "transcoders beat
+  SAEs" direction on the interpretability axis (full Pareto-dominance still open — TC reconstruction not
+  isolable). Recompute: scripts/headtohead_autointerp.py.
 - Multi-layer (cross-component) circuit via sparse-feature-circuits.
 
 ## Phase 3 pre-registration (R3 — COMMITTED 2026-06-22 BEFORE any eval run; do not change post-hoc)
@@ -272,3 +279,42 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
     (autointerp_sae.json/autointerp_tc.json still present, scorer=Qwen2.5-3B); (d) no fabricated 7B
     scores anywhere in the docs (R5). The 7B run itself is NOT reproducible until the base-model-free fix
     lands — it is a documented Gate (free base model from cuda before scoring, or a >24 GiB GPU).
+- 2026-06-23 (coder): RESOLVED the stronger-scorer question by running the 7B on an A100-40GB (where the
+  resident Gemma base model + 7B vLLM scorer coexist), which the L4 could not fit. This ANSWERS the
+  scorer-strength question the ATTEMPT left open, and FLIPS the Phase-3 head-to-head.
+  - CODE (infra/modal_app.py): refactored auto_interp_custom's body into a GPU-agnostic helper
+    `_auto_interp_impl(...)`; kept `auto_interp_custom` (gpu="L4", 3B scorer, max_memory=0.5) as a thin
+    wrapper (backward-compatible — historical ai-g2 path unchanged); added `auto_interp_custom_a100`
+    (gpu="A100-40GB", default scorer Qwen2.5-7B, max_memory=0.65) calling the same helper; added an
+    `autointerp_main` local_entrypoint (--gpu a100|l4, config-driven, enforces the C3 <=500 cap). Verified
+    Modal's A100-40GB GPU string against the installed `modal` 1.4.2 (parse_gpu_config uppercases + sends
+    to backend; docs confirm "A100-40GB" = the 40 GiB variant, bare "A100" may auto-upgrade to 80GB so I
+    pinned -40GB). `Function.with_options` does NOT exist in 1.4.2 (only Cls), so a second decorated fn is
+    the clean config-driven path, not a call-time override. py_compile + ruff clean on my lines (only the
+    file's pre-existing E501 etc remain); 170 CPU tests still pass (infra not imported by the package).
+  - RAN (E1, seed 0 logged): both coders, scorer Qwen/Qwen2.5-7B-Instruct, max_latents=100, A100-40GB,
+    PYTHONUTF8=1. The 7B's 14.29 GiB weights loaded next to the ~6 GiB resident base model and both runs
+    completed cleanly (~8 min each, ~$0.6 total GPU — under the unit's $5 cap). Pulled
+    autointerp_sae_7b.json / autointerp_tc_7b.json via `modal volume get`; verified the 3B jsons
+    (autointerp_sae/tc.json) are UNTOUCHED (no clobber) and the 7B jsons log seed/scorer_tag/max_memory (E3).
+  - RESULT (real, R5 — no fabrication): SAE det 0.6072/fuzz 0.6309 (n=58); TC det 0.6602/fuzz 0.6895 (n=60).
+    Both far above the 3B near-chance => scorer artifact confirmed. Recomputed the head-to-head with
+    scripts/headtohead_autointerp.py (unpaired diff-of-means bootstrap, seed 0, 10k resamples — the SAME
+    method as ai-g2; validated by reproducing the 3B CIs exactly before adding 7B). 3B: det Δ(TC-SAE)+0.001
+    CI[-0.022,+0.022], fuzz +0.023 CI[-0.001,+0.047] (both incl 0). 7B: det +0.053 CI[+0.016,+0.089], fuzz
+    +0.059 CI[+0.019,+0.097] (both EXCLUDE 0) => transcoder significantly more interpretable on both.
+    VERDICT (R4): 7B raised scores above chance AND changed the conclusion (inconclusive -> transcoder wins);
+    confirms the pre-registered Transcoders-Beat-SAEs direction on the interpretability axis (full
+    Pareto-dominance still open — TC own-objective reconstruction not externally isolable).
+  - DOCS: EXPERIMENTS.md (ai-g2-sae-7b + ai-g2-tc-7b rows with real scores; ai-g2-7b-ATTEMPT annotated
+    RESOLVED), REPORT.md (Phase-3 table + verdict + scorer-strength note + abstract + summary table all
+    updated to scorer-dependent/transcoder-wins), README (results table + bottom line + Phase-3 commands),
+    PROGRESS (this). New scripts/headtohead_autointerp.py (CPU, numpy-only). .gitignore: artifacts_pull/.
+    COMMITTED on main.
+  - HANDOFF / tester: (a) py_compile infra/modal_app.py + the 3 new fns exist (impl + 2 wrappers + entrypoint);
+    (b) `python scripts/headtohead_autointerp.py --dir artifacts_pull` reproduces 3B CIs exactly (matches the
+    ai-g2 row) AND the 7B CIs both exclude 0; (c) the numbers in EXPERIMENTS/REPORT/README match the JSONs on
+    the volume (modal volume ls microscope-artifacts | autointerp_*_7b.json) and the FINAL AUTO-INTERP RESULT
+    lines; (d) 3B jsons untouched (no clobber); (e) no fabricated numbers (R5); (f) ruff adds no NEW non-E501
+    issues vs the pre-existing baseline; 170 tests still pass. A 7B re-run with the same seed should
+    reproduce modulo CUDA-sampling nondeterminism (E1).
