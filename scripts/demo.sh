@@ -25,4 +25,4 @@ cat <<'STEPS'
 STEPS
 
 # To enable the real <=3-minute walk, replace this block with the three commands above once the
-# GPU host is provisioned and the wrappers pass the coder->tester->quality-checker loop.
+# GPU host is provisioned and the wrappers pass their tests.

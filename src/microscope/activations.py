@@ -2,12 +2,12 @@
 
 Two paths live here:
 
-* :func:`harvest_resid_activations` — the **verified** Gemma Scope recipe (ADR-0003): collect the
+* :func:`harvest_resid_activations`, the **verified** Gemma Scope recipe (ADR-0003): collect the
   TransformerLens ``blocks.<L>.hook_resid_post`` residual stream, excluding the BOS token, returned
   as a single stacked ``[N, d_model]`` tensor ready for :func:`microscope.eval.reconstruction`.
-  This is the activation source the Gemma Scope SAEs were trained against — feeding raw HuggingFace
-  ``output_hidden_states`` instead gave variance-explained ≈ −4.5 (ADR-0003).
-* :func:`harvest_activations` — the dictionary_learning training buffer path (Phase 2), still a
+  This is the activation source the Gemma Scope SAEs were trained against, feeding raw HuggingFace
+  ``output_hidden_states`` instead gave variance-explained ≈ -4.5 (ADR-0003).
+* :func:`harvest_activations`, the dictionary_learning training buffer path (Phase 2), still a
   documented E4 stub until its nnsight + dictionary_learning APIs are verified on the host.
 
 Both prefer the in-memory / small-token-budget path; large on-disk activation caches can reach
@@ -47,11 +47,11 @@ def harvest_resid_activations(config: RunConfig, *, max_tokens: int | None = Non
             on both means "use all documents in the loaded split").
 
     Returns:
-        A CPU ``torch.Tensor`` of shape ``[N, d_model]`` (``float32``) — the BOS-excluded residual
+        A CPU ``torch.Tensor`` of shape ``[N, d_model]`` (``float32``), the BOS-excluded residual
         stream activations, ready for the reconstruction metrics.
 
     Raises:
-        RuntimeError: if ``transformer_lens`` is not importable — this path runs only on the Modal
+        RuntimeError: if ``transformer_lens`` is not importable, this path runs only on the Modal
             ``[gpu]`` image (ADR-0003), never on the CPU base box.
         ValueError: if ``config.layer`` is ``None`` (the hookpoint needs a concrete layer index).
     """
@@ -61,7 +61,7 @@ def harvest_resid_activations(config: RunConfig, *, max_tokens: int | None = Non
         raise GpuStackUnavailable(
             "harvest_resid_activations requires 'transformer_lens', which is not installed on this "
             "machine. This stage runs on the Modal [gpu] image (see infra/modal_app.py and "
-            "docs/adr/0003) — it cannot run on the CPU base box."
+            "docs/adr/0003), it cannot run on the CPU base box."
         ) from exc
 
     import torch

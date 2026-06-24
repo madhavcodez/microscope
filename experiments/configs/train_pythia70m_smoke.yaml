@@ -1,4 +1,4 @@
-# Phase 2 SMOKE training config — Pythia-70M (ADR-0004; sparsify 1.3.0).
+# Phase 2 SMOKE training config, Pythia-70M (ADR-0004; sparsify 1.3.0).
 # Purpose: prove the sparsify training wrapper runs end-to-end on a cheap model BEFORE any
 # Gemma-2-2B spend (RULES.md C4 "smallest model that proves the point"). Cheap; fits a small GPU.
 #
@@ -11,7 +11,7 @@ model: EleutherAI/pythia-70m-deduped
 layer: 3                      # small mid-stack layer; sparsify places the hookpoint from layers=[3]
 hookpoint: null              # leave null => sparsify derives the hookpoint from `layer` (ADR-0004)
 dataset: NeelNanda/pile-10k  # E4: confirm availability / text field on the Modal [gpu] image (unit 2)
-n_tokens: 500_000            # tiny budget — this is a convergence smoke, not a real run
+n_tokens: 500_000            # tiny budget, this is a convergence smoke, not a real run
 seed: 0
 
 # --- sparsify SaeConfig / TrainConfig settings (ADR-0004 §"E4 verification results") ---

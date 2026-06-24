@@ -1,13 +1,13 @@
-"""Phase 4 — the mandatory adversarial controls (RULES.md R2). The differentiator of MicroScope.
+"""Phase 4, the mandatory adversarial controls (RULES.md R2). The differentiator of MicroScope.
 
 Two controls, each attached to a class of claim:
-  1. randomized-model control — run the full auto-interp pipeline on a randomized-weight copy of the
+  1. randomized-model control, run the full auto-interp pipeline on a randomized-weight copy of the
      model and report the GAP between real and randomized interpretability scores. Tests whether
      high scores are partly an artifact of token statistics. (any interpretability claim.)
-  2. steering baseline — see microscope.steering: compare an SAE-feature steering intervention
+  2. steering baseline, see microscope.steering: compare an SAE-feature steering intervention
      against a simple difference-of-means direction for the same concept. (any steering claim.)
 
-CONTRACT for the randomized-model control below — implemented on the GPU host after E4 verification.
+CONTRACT for the randomized-model control below, implemented on the GPU host after E4 verification.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-# Phase 2 training config — Gemma-2-2B, layer 12 (ADR-0004; sparsify 1.3.0).
+# Phase 2 training config, Gemma-2-2B, layer 12 (ADR-0004; sparsify 1.3.0).
 # The real custom SAE + skip-transcoder run, on the SAME model/layer as the Phase-1 reproduction
 # (gemma2_2b_reproduce.yaml) so Phase-3 can compare custom coders against the Gemma Scope reference.
 #
@@ -8,7 +8,7 @@
 # microscope.saes.train.coder_config_dict (extra='allow' => width/k/etc. are read here).
 #
 # COST (RULES.md C2/C4): a Gemma-2-2B training run is cost-gated (~$5/90 min each, ADR-0004); there
-# are TWO runs (SAE + transcoder). n_tokens below is a MODEST starting budget — the exact token
+# are TWO runs (SAE + transcoder). n_tokens below is a MODEST starting budget, the exact token
 # budget is finalized in Phase-2 unit 3 under the $30 cap. If either run threatens the cap, STOP and
 # present options as a Gate. Smoke on train_pythia70m_smoke.yaml FIRST (R1/C4).
 name: train_gemma2_2b_l12

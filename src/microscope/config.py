@@ -128,7 +128,7 @@ def load_config(path: str | Path) -> RunConfig:
     """Load a YAML run config from ``experiments/configs/`` into a :class:`RunConfig`.
 
     Raises:
-        FileNotFoundError: if the path does not exist (fail fast — RULES.md input validation).
+        FileNotFoundError: if the path does not exist (fail fast, RULES.md input validation).
         ValueError: if the YAML is empty or not a mapping.
     """
     p = Path(path)
@@ -160,7 +160,7 @@ def config_hash(config: Mapping[str, Any] | BaseModel, *, length: int = 12) -> s
 def git_commit(short: bool = True) -> str:
     """Return the current git commit hash, or 'unknown' if not in a git repo / git missing.
 
-    Never raises — metadata capture must not crash a run.
+    Never raises, metadata capture must not crash a run.
     """
     args = ["git", "rev-parse", "--short", "HEAD"] if short else ["git", "rev-parse", "HEAD"]
     try:
@@ -312,7 +312,7 @@ def reproduction_logged(path: Path | None = None) -> bool:
     Parses the EXPERIMENTS.md markdown table, finds the header row (the line starting with
     ``| run_id``), locates the column whose header contains ``label`` (the full header is
     ``label (repro/novel/inconclusive)``), then scans every data row and checks whether that
-    column's cell — stripped and lowercased — contains ``reproduced``.
+    column's cell, stripped and lowercased, contains ``reproduced``.
 
     This is the mechanical R1 gate: it answers "has the pipeline reproduced a known result yet?"
     so callers (e.g. the ``train`` command) can refuse to start custom training until it has.
@@ -322,7 +322,7 @@ def reproduction_logged(path: Path | None = None) -> bool:
 
     Returns:
         True if at least one data row's label cell contains 'reproduced', else False. A missing
-        file, an absent header, or a table with no data rows all return False (fail closed — the
+        file, an absent header, or a table with no data rows all return False (fail closed, the
         gate stays shut when there is no positive evidence of a reproduction).
     """
     target = path or EXPERIMENTS_PATH

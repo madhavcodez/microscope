@@ -3,7 +3,7 @@
 GPU-bound stages that are NOT yet wired to their library API raise GpuImplementationPending (a
 NotImplementedError subclass) whose message names the stage; those stubs are only asserted to raise,
 never implemented or exercised. Stages that ARE implemented but run only on the Modal [gpu] image
-(e.g. train_coder, ADR-0004) instead raise GpuStackUnavailable when the GPU stack is absent — see
+(e.g. train_coder, ADR-0004) instead raise GpuStackUnavailable when the GPU stack is absent, see
 test_train_coder.py for that unit's full coverage; the relevant case is mirrored here.
 """
 
@@ -47,10 +47,10 @@ def test_pending_message_marks_deliberate_stub_not_bug() -> None:
 
 
 def test_train_coder_is_implemented_not_pending() -> None:
-    # Arrange: train_coder is no longer a GpuImplementationPending stub — it is the real Phase-2
+    # Arrange: train_coder is no longer a GpuImplementationPending stub, it is the real Phase-2
     # sparsify wrapper (ADR-0004) that validates the config, then gates on the GPU stack. On a valid
     # config (layer + width + k present) the absent sparsify surfaces GpuStackUnavailable, NOT
-    # GpuImplementationPending — same stub->implemented transition reproduce/harvest already made.
+    # GpuImplementationPending, same stub->implemented transition reproduce/harvest already made.
     from microscope.saes.train import train_coder
 
     cfg = RunConfig(name="x", model="EleutherAI/pythia-70m", layer=3, width=4096, k=32)

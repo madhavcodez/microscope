@@ -1,6 +1,6 @@
 """Generate + score feature explanations with delphi, using a LOCAL scorer model (no paid API).
 
-CONTRACT — Phase 1/3. Implemented on the GPU host after verifying delphi's current local-model usage
+CONTRACT, Phase 1/3. Implemented on the GPU host after verifying delphi's current local-model usage
 (RULES.md E4). Produces detection / fuzzing / intruder-detection scores. Capped at <= 500 features
 per run (RULES.md C3); raising the cap or switching to a paid API is a Human-Decision Gate.
 """
@@ -12,7 +12,7 @@ from typing import Any
 from .._pending import pending
 from ..config import RunConfig
 
-MAX_FEATURES_PER_RUN = 500  # RULES.md C3 — hard cap unless the human raises it (Gate).
+MAX_FEATURES_PER_RUN = 500  # RULES.md C3, hard cap unless the human raises it (Gate).
 
 
 def run_autointerp(
@@ -31,7 +31,7 @@ def run_autointerp(
         scorer_model: HF id of the LOCAL scorer model delphi will run on the GPU (no paid API).
 
     Returns:
-        Aggregate scores (detection / fuzzing / intruder) over the evaluated feature set (R3 — no
+        Aggregate scores (detection / fuzzing / intruder) over the evaluated feature set (R3, no
         cherry-picking; report aggregates), plus per-feature detail for the demo.
 
     Raises:

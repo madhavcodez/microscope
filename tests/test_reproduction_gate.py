@@ -2,11 +2,11 @@
 
 Two layers are exercised:
 
-* ``microscope.config.reproduction_logged`` — the parser. It answers "has the pipeline reproduced a
+* ``microscope.config.reproduction_logged``, the parser. It answers "has the pipeline reproduced a
   known Gemma Scope result yet?" by scanning the EXPERIMENTS.md markdown table for a data row whose
   ``label`` cell contains ``reproduced``. It must fail CLOSED (return False) on a missing file, an
   absent header, or a table with no data rows, so the gate never opens without positive evidence.
-* ``microscope.cli train`` — the consumer. When the gate is shut it must exit 3 (the R1 gate code)
+* ``microscope.cli train``, the consumer. When the gate is shut it must exit 3 (the R1 gate code)
   WITHOUT loading/seeding the config; when the gate is open it must get past R1 and hit the GPU/E4
   gate (exit 2). Exit 3 (R1) and exit 2 (GPU) must stay distinct so the two failures are
   distinguishable by callers and CI.
@@ -279,7 +279,7 @@ def test_train_blocked_with_exit_3_when_gate_shut_via_real_parser(
 def test_train_blocked_exit_3_via_function_monkeypatch(
     smoke_config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Arrange: pin the CLI branch directly — force the gate predicate False regardless of the table.
+    # Arrange: pin the CLI branch directly, force the gate predicate False regardless of the table.
     monkeypatch.setattr("microscope.cli.reproduction_logged", lambda: False)
 
     # Act

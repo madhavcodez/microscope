@@ -3,7 +3,7 @@
 These three functions are the load-bearing math of the Phase-1 reproduction gate (ADR-0003):
 variance-explained and mean-L0 are exactly the numbers compared against the published Gemma Scope
 ballpark. They are pure (no model/SAE loading), so they are verified here on tiny, hand-checkable
-tensors plus a ``FakeSAE`` stand-in (no transformer_lens / sae_lens — those are GPU-only).
+tensors plus a ``FakeSAE`` stand-in (no transformer_lens / sae_lens, those are GPU-only).
 """
 
 from __future__ import annotations

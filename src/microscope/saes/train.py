@@ -1,17 +1,17 @@
 """Train an SAE or a skip-transcoder on >=1 layer (wraps EleutherAI ``sparsify``).
 
-CONTRACT — Phase 2 (ADR-0004). Both the SAE and the skip-transcoder are trained with the SAME
-``sparsify`` ``SaeConfig`` / ``Trainer``; they differ ONLY by two flags — ``transcode`` and
-``skip_connection`` — held against a shared ``num_latents`` (width) and ``k`` (L0). That shared
+CONTRACT, Phase 2 (ADR-0004). Both the SAE and the skip-transcoder are trained with the SAME
+``sparsify`` ``SaeConfig`` / ``Trainer``; they differ ONLY by two flags, ``transcode`` and
+``skip_connection``, held against a shared ``num_latents`` (width) and ``k`` (L0). That shared
 recipe is the whole point: it gives Phase 3 a methodologically fair SAE-vs-skip-transcoder
 head-to-head instead of a confounded one.
 
 This module splits cleanly into two layers so the distinction is testable WITHOUT a GPU:
 
-* :func:`coder_config_dict` — a **pure** function (no ``sparsify`` / ``torch`` import) that maps a
+* :func:`coder_config_dict`, a **pure** function (no ``sparsify`` / ``torch`` import) that maps a
   :class:`~microscope.config.RunConfig` + a ``kind`` to the flat dict of intended sparsify settings.
   This is the TESTABLE CORE; it encodes the SAE-vs-skip-transcoder invariant and validates inputs.
-* :func:`train_coder` — the **GPU-only** entry point. It imports ``sparsify`` lazily (raising
+* :func:`train_coder`, the **GPU-only** entry point. It imports ``sparsify`` lazily (raising
   :class:`~microscope._pending.GpuStackUnavailable` naming the Modal ``[gpu]`` image when absent,
   mirroring :func:`microscope.activations.harvest_resid_activations`), builds the real
   ``SaeConfig`` / ``TrainConfig`` from :func:`coder_config_dict`, loads the HF model + a dataset,
@@ -19,7 +19,7 @@ This module splits cleanly into two layers so the distinction is testable WITHOU
 
 Per RULES.md E4 the sparsify API was verified on the Modal image (sparsify 1.3.0, ADR-0004 §"E4
 verification results"); this wrapper is written against that verified surface. NO training is run
-here — it runs on Modal (Phase 2, unit 2). Smoke-test on Pythia-70M before spending on Gemma-2-2B
+here, it runs on Modal (Phase 2, unit 2). Smoke-test on Pythia-70M before spending on Gemma-2-2B
 (RULES.md C4); every run is logged with full metadata (E3).
 """
 
@@ -35,7 +35,7 @@ CoderKind = Literal["sae", "transcoder"]
 # Defaults for the sparsify settings that are not first-class RunConfig fields. RunConfig uses
 # extra='allow' (config.py), so width / k / batch_size / lr / save_dir / run_name may be supplied
 # per-YAML; these constants are the fallbacks when a YAML omits the optional ones. width and k have
-# NO default on purpose — a fair SAE-vs-transcoder comparison hinges on an explicit, shared width
+# NO default on purpose, a fair SAE-vs-transcoder comparison hinges on an explicit, shared width
 # and k, so we force the config to state them rather than silently guessing (ADR-0004).
 DEFAULT_ACTIVATION = "topk"  # TopK => k is the exact L0 (ADR-0004); 'groupmax' is the other option.
 DEFAULT_BATCH_SIZE = 16
@@ -51,7 +51,7 @@ def _coerce_positive_int(value: Any, *, field: str) -> int:
     """Coerce ``value`` to a strictly-positive int or raise a clear ValueError naming ``field``.
 
     YAML may yield an int already, or a string/float if the author wrote ``"64"`` or ``64.0``;
-    accept those but reject anything non-numeric, non-integral, or <= 0 (fail fast — E2/validation).
+    accept those but reject anything non-numeric, non-integral, or <= 0 (fail fast, E2/validation).
     """
     try:
         as_float = float(value)
@@ -65,7 +65,7 @@ def _coerce_positive_int(value: Any, *, field: str) -> int:
 def coder_config_dict(config: RunConfig, kind: CoderKind) -> dict[str, Any]:
     """Map a run config + coder ``kind`` to the flat dict of intended ``sparsify`` settings (PURE).
 
-    This function imports nothing heavy — it is the CPU-testable core that encodes the central
+    This function imports nothing heavy, it is the CPU-testable core that encodes the central
     Phase-2 invariant (ADR-0004): an **SAE** is ``transcode=False, skip_connection=False`` and a
     **skip-transcoder** is ``transcode=True, skip_connection=True``, while ``num_latents`` (width)
     and ``k`` (TopK L0) are taken from the SAME config so the two coders are directly comparable.
@@ -185,7 +185,7 @@ def train_coder(config: RunConfig, kind: CoderKind) -> dict[str, Any]:
         them post-training; otherwise those are left out here and computed in unit 2/3.
 
     Raises:
-        GpuStackUnavailable: if ``sparsify`` is not importable — this stage runs only on the Modal
+        GpuStackUnavailable: if ``sparsify`` is not importable, this stage runs only on the Modal
             ``[gpu]`` image (ADR-0003/0004), never on the CPU base box.
         ValueError: propagated from :func:`coder_config_dict` for invalid/missing config fields.
     """
@@ -199,7 +199,7 @@ def train_coder(config: RunConfig, kind: CoderKind) -> dict[str, Any]:
     except ImportError as exc:  # sparsify lives only on the Modal [gpu] image (ADR-0004).
         raise GpuStackUnavailable(
             "train_coder requires 'sparsify' (EleutherAI), which is not installed on this machine. "
-            "This stage runs on the Modal [gpu] image (see infra/modal_app.py and docs/adr/0004) — "
+            "This stage runs on the Modal [gpu] image (see infra/modal_app.py and docs/adr/0004), "
             "it cannot run on the CPU base box."
         ) from exc
 
@@ -268,7 +268,7 @@ def train_coder(config: RunConfig, kind: CoderKind) -> dict[str, Any]:
     # --- Launch training + save the dictionary, then return metrics (the unit-2 work) ---
     # The configs, model, dataset, and Trainer above are the real, verified GPU path (ADR-0004). The
     # ONE remaining unverified API is the train-launch method name: ADR-0004 left '.fit()' vs
-    # '.train()' UNRESOLVED and says it is confirmed on the Modal [gpu] image in unit 2 — so it is
+    # '.train()' UNRESOLVED and says it is confirmed on the Modal [gpu] image in unit 2, so it is
     # NOT guessed on this CPU box. _launch_train_and_save isolates that single open call.
     return _launch_train_and_save(trainer, sparsify, settings, layer=config.layer)
 
@@ -278,8 +278,8 @@ def _launch_train_and_save(
 ) -> dict[str, Any]:
     """Launch the sparsify training run, save the trained dictionary, and return run metrics.
 
-    Split out from :func:`train_coder` so the one remaining E4-unverified call — the train-launch
-    method name (``.fit()`` vs ``.train()``, ADR-0004) — is isolated and clearly flagged.
+    Split out from :func:`train_coder` so the one remaining E4-unverified call, the train-launch
+    method name (``.fit()`` vs ``.train()``, ADR-0004), is isolated and clearly flagged.
     ``trainer`` and ``sparsify`` are the live GPU objects; this body only ever executes on the Modal
     ``[gpu]`` image (its caller raises :class:`GpuStackUnavailable` before reaching here on CPU).
 

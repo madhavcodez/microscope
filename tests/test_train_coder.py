@@ -17,7 +17,7 @@ What is verified here:
 * Input validation (fail fast, RULES.md E2): bad ``kind``; missing/non-positive/non-integral
   ``width`` / ``k``; bad ``activation``; ``layer is None``; non-positive ``lr`` / ``batch_size``.
 * :func:`train_coder` on this CPU box raises :class:`GpuStackUnavailable` (sparsify is GPU-only,
-  ADR-0004) and NOT :class:`GpuImplementationPending` (it is implemented, not a stub) — and it
+  ADR-0004) and NOT :class:`GpuImplementationPending` (it is implemented, not a stub), and it
   validates the config FIRST, so a bad config raises ``ValueError`` before the GPU gate.
 * The two committed Phase-2 YAMLs load via :func:`microscope.config.load_config` and flow cleanly
   through :func:`coder_config_dict` for both kinds, carrying the expected width / k / layer.
@@ -119,7 +119,7 @@ def test_sae_and_transcoder_share_identical_width_and_k() -> None:
 
 
 def test_only_the_two_flags_differ_between_sae_and_transcoder() -> None:
-    # Arrange: stronger fairness check — the SAE and transcoder settings must be IDENTICAL except
+    # Arrange: stronger fairness check, the SAE and transcoder settings must be IDENTICAL except
     # for transcode / skip_connection / kind / run_name (which is kind-suffixed by default).
     config = _run_config(width=8192, k=48)
 
@@ -272,7 +272,7 @@ def test_invalid_kind_raises_value_error() -> None:
 
 
 def test_missing_width_raises_value_error() -> None:
-    # Arrange: width has NO default — a fair comparison demands an explicit shared width (ADR-0004).
+    # Arrange: width has NO default, a fair comparison demands an explicit shared width (ADR-0004).
     config = RunConfig(name="u", model="m", layer=3, k=32)
 
     # Act / Assert
@@ -281,7 +281,7 @@ def test_missing_width_raises_value_error() -> None:
 
 
 def test_missing_k_raises_value_error() -> None:
-    # Arrange: k has NO default — the SAE and transcoder MUST share an explicit k (ADR-0004).
+    # Arrange: k has NO default, the SAE and transcoder MUST share an explicit k (ADR-0004).
     config = RunConfig(name="u", model="m", layer=3, width=4096)
 
     # Act / Assert
@@ -388,7 +388,7 @@ def test_non_positive_batch_size_raises_value_error(bad_batch: int) -> None:
 
 def test_train_coder_raises_gpu_stack_unavailable_on_cpu() -> None:
     # Arrange: sparsify is NOT installed on this box (it lives on the Modal [gpu] image, ADR-0004),
-    # so train_coder must surface GpuStackUnavailable — mirroring harvest_resid_activations /
+    # so train_coder must surface GpuStackUnavailable, mirroring harvest_resid_activations /
     # load_pretrained_sae, the other implemented-but-GPU-only stages.
     config = _run_config()
 
@@ -410,7 +410,7 @@ def test_train_coder_error_names_gpu_image() -> None:
 
 
 def test_train_coder_error_is_runtime_not_pending() -> None:
-    # Arrange: pin the behaviour change documented in the handoff — train_coder moved from a
+    # Arrange: pin the behaviour change documented in the handoff, train_coder moved from a
     # GpuImplementationPending STUB to a real implementation that raises GpuStackUnavailable. It IS
     # a RuntimeError (callers catching RuntimeError still work) but is NOT GpuImplementationPending
     # (that would mean it regressed back to an unimplemented stub).
@@ -433,7 +433,7 @@ def test_train_coder_transcoder_also_hits_gpu_gate() -> None:
 
 def test_train_coder_validates_before_gpu_gate() -> None:
     # Arrange: a config missing 'k' is invalid. train_coder calls coder_config_dict FIRST, so the
-    # ValueError must fire BEFORE the GPU import gate — a bad config fails fast on CPU and never
+    # ValueError must fire BEFORE the GPU import gate, a bad config fails fast on CPU and never
     # pretends it needs a GPU (RULES.md input validation; documented fail-fast ordering).
     config = RunConfig(name="u", model="m", layer=3, width=4096)  # no k
 
@@ -443,7 +443,7 @@ def test_train_coder_validates_before_gpu_gate() -> None:
 
 
 def test_train_coder_validates_missing_width_before_gpu_gate() -> None:
-    # Arrange: symmetry with the missing-k case — missing width is also caught before the gate.
+    # Arrange: symmetry with the missing-k case, missing width is also caught before the gate.
     config = RunConfig(name="u", model="m", layer=3, k=32)  # no width
 
     # Act / Assert

@@ -6,10 +6,10 @@ Two kinds of GPU gate live here:
   ``harvest_activations`` training-buffer path): not yet wired to their library APIs, so they raise
   :class:`GpuImplementationPending` and name their stage. Never implemented or exercised on CPU.
 * **Implemented, GPU-only stages** (``harvest_resid_activations`` / ``load_pretrained_sae`` /
-  ``reproduce`` — the Phase-1 reproduction unit): these contain the verified recipe (ADR-0003) and
+  ``reproduce``, the Phase-1 reproduction unit): these contain the verified recipe (ADR-0003) and
   raise :class:`GpuStackUnavailable` (a ``RuntimeError`` subclass) naming the Modal ``[gpu]`` image
   when ``transformer_lens`` / ``sae_lens`` are absent (i.e. on this CPU box). They must NOT raise
-  GpuImplementationPending — that would mean the implementation regressed back to a stub. The CLI
+  GpuImplementationPending, that would mean the implementation regressed back to a stub. The CLI
   catches GpuStackUnavailable to render the gate as exit code 2 (see tests/test_cli.py).
 
 One genuine CPU-verifiable branch is also covered here: run_autointerp enforces the
@@ -50,7 +50,7 @@ def test_load_pretrained_sae_raises_gpu_stack_unavailable(cfg: RunConfig) -> Non
 
 
 def test_load_pretrained_sae_error_is_runtime_not_pending(cfg: RunConfig) -> None:
-    # Arrange: pin the behaviour change — GpuStackUnavailable IS a RuntimeError (callers catching
+    # Arrange: pin the behaviour change, GpuStackUnavailable IS a RuntimeError (callers catching
     # RuntimeError still work) but is NOT GpuImplementationPending (it is implemented, not a stub).
     from microscope.reproduce.gemma_scope import load_pretrained_sae
 
@@ -146,7 +146,7 @@ def test_run_autointerp_raises_value_error_over_feature_cap(cfg: RunConfig) -> N
 
 def test_randomized_model_control_raises_value_error_over_feature_cap(cfg: RunConfig) -> None:
     # Arrange: the randomized control runs the FULL auto-interp pipeline, so it is bound by the same
-    # <=500 cap as the real run (RULES.md C3) — it must not be an unbounded-spend back door.
+    # <=500 cap as the real run (RULES.md C3), it must not be an unbounded-spend back door.
     from microscope.autointerp.run import MAX_FEATURES_PER_RUN
     from microscope.eval.controls import randomized_model_control
 

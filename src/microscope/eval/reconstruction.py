@@ -4,7 +4,7 @@ These are the metrics the Phase-1 reproduction is graded on (ADR-0003): they wer
 Modal GPU host to give variance_explained 0.797 / mean L0 83 for the canonical Gemma Scope SAE
 (``layer_12/width_16k``). The functions here are **pure**: given an activation tensor (and, for
 :func:`reconstruction_metrics`, an SAE object exposing ``.encode``/``.decode``) they compute and
-return numbers. They load no model and no SAE — that is the caller's job (see
+return numbers. They load no model and no SAE, that is the caller's job (see
 :mod:`microscope.reproduce.gemma_scope`). This keeps them unit-testable with small tensors.
 
 ``torch`` is imported lazily inside each function so this module still imports on a CPU-only base
@@ -38,7 +38,7 @@ def variance_explained(x: torch.Tensor, recon: torch.Tensor) -> float:
 
     Returns:
         The variance-explained as a Python float. Can be negative if the reconstruction is worse
-        than predicting the mean (the −4.5 trap in ADR-0003 from the wrong activation source).
+        than predicting the mean (the -4.5 trap in ADR-0003 from the wrong activation source).
 
     Raises:
         ValueError: if ``x`` and ``recon`` have different shapes, or the total variance is zero
@@ -64,7 +64,7 @@ def mean_l0(feats: torch.Tensor) -> float:
     """Mean number of active (strictly positive) SAE features per token.
 
     L0 is the sparsity metric for an SAE: it counts how many latent features fire on each input and
-    averages over tokens. Computed as ``(feats > 0).float().sum(dim=-1).mean()`` — the per-token
+    averages over tokens. Computed as ``(feats > 0).float().sum(dim=-1).mean()``, the per-token
     active-count, averaged over all tokens.
 
     Args:
@@ -82,7 +82,7 @@ def reconstruction_metrics(activations: Any, sae: Any) -> dict[str, Any]:
     """Encode ``activations`` with ``sae``, decode, and return reconstruction quality metrics.
 
     This is the metric half of the Phase-1 reproduction. It is pure given its inputs: it calls
-    ``sae.encode`` / ``sae.decode`` but performs **no model or SAE loading** (RULES.md separation —
+    ``sae.encode`` / ``sae.decode`` but performs **no model or SAE loading** (RULES.md separation -
     loading lives in :mod:`microscope.reproduce.gemma_scope`). The SAE may use a lower-precision
     dtype (e.g. bfloat16); the encode call is fed activations as-is and the metrics cast to float
     internally, mirroring the proven Modal recipe (ADR-0003). ``d_sae`` is read from feats' width.

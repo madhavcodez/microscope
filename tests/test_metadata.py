@@ -18,7 +18,7 @@ def test_git_commit_returns_non_empty_string() -> None:
     # Arrange / Act
     commit = git_commit()
 
-    # Assert: either a real short hash or the documented 'unknown' sentinel — never empty.
+    # Assert: either a real short hash or the documented 'unknown' sentinel, never empty.
     assert isinstance(commit, str)
     assert commit != ""
 
@@ -41,7 +41,7 @@ def test_git_commit_returns_unknown_outside_a_git_repo(
     # Act
     commit = git_commit()
 
-    # Assert: documented graceful fallback — never raises, never empty.
+    # Assert: documented graceful fallback, never raises, never empty.
     assert commit == "unknown"
 
 

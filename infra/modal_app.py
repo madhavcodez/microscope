@@ -1,4 +1,4 @@
-"""Modal execution layer for MicroScope (the $30 GPU host — ADR-0003).
+"""Modal execution layer for MicroScope (the $30 GPU host, ADR-0003).
 
 Modal is serverless + per-second billed, so there is no idle burn: GPU cost accrues only while a
 function runs. This file builds the GPU image and exposes verification entrypoints. Stage wrappers
@@ -6,10 +6,10 @@ function runs. This file builds the GPU image and exposes verification entrypoin
 verified on this image (RULES.md E4).
 
 Run:
-  modal run infra/modal_app.py::probe       # CPU — import + dump library APIs (E4 verification)
-  modal run infra/modal_app.py::gpu_smoke   # GPU — nvidia-smi, torch.cuda, gated-HF access check
+  modal run infra/modal_app.py::probe       # CPU, import + dump library APIs (E4 verification)
+  modal run infra/modal_app.py::gpu_smoke   # GPU, nvidia-smi, torch.cuda, gated-HF access check
 
-Budget (ADR-0002): hard cap $30. Default GPU = L4 (24 GB, ~$0.80/hr) — cheapest 24 GB option that
+Budget (ADR-0002): hard cap $30. Default GPU = L4 (24 GB, ~$0.80/hr), cheapest 24 GB option that
 fits Gemma-2-2B. Keep functions short; nothing here should run more than a few minutes.
 """
 
@@ -37,21 +37,21 @@ base_image = (
 )
 
 # Full image: base + the source-only interp libraries. Each install is `|| true` so a single bad
-# URL cannot abort the whole build — probe_interp then reports exactly which imported and their APIs
+# URL cannot abort the whole build, probe_interp then reports exactly which imported and their APIs
 # (E4 discovery). The verified install commands get pinned into this file once confirmed.
 full_image = base_image.run_commands(
     "pip install 'git+https://github.com/saprmarks/dictionary_learning.git' || true",
     "pip install sae-bench || pip install 'git+https://github.com/adamkarvonen/SAEBench.git' || true",
     "pip install 'git+https://github.com/EleutherAI/delphi.git' || true",
     "pip install 'git+https://github.com/saprmarks/feature-circuits.git' || true",
-    # EleutherAI sparsify — trains the custom SAE + skip-transcoder (ADR-0004). Install from the
+    # EleutherAI sparsify, trains the custom SAE + skip-transcoder (ADR-0004). Install from the
     # EleutherAI repo (NOT PyPI 'sparsify', which is Neural Magic's unrelated package).
     "pip install 'git+https://github.com/EleutherAI/sparsify.git' || true",
     # torchvision is an unused transitive dep whose video API breaks the HF `datasets` torch
-    # formatter (ImportError: VideoReader) during delphi's text caching — remove it.
+    # formatter (ImportError: VideoReader) during delphi's text caching, remove it.
     "pip uninstall -y torchvision || true",
     # flashinfer JIT-compiles CUDA kernels at runtime, but this image has the CUDA runtime, not the
-    # toolkit (no nvcc/CUDA_HOME) — its sampler build fails in vLLM. Remove it so vLLM falls back to
+    # toolkit (no nvcc/CUDA_HOME), its sampler build fails in vLLM. Remove it so vLLM falls back to
     # prebuilt FlashAttention + the native PyTorch sampler (no compilation needed). (ADR-0003)
     "pip uninstall -y flashinfer-python flashinfer || true",
 )
@@ -143,7 +143,7 @@ def reproduce_recon(layer: int = 12, width: str = "16k", n_docs: int = 128, seq_
 
 @app.function(image=full_image, secrets=[HF_SECRET], timeout=1200)
 def probe_sparsify2() -> dict[str, str]:
-    """E4: sparsify training flow — data tokenization helper + Trainer launch method + dataset type."""
+    """E4: sparsify training flow, data tokenization helper + Trainer launch method + dataset type."""
     import inspect
 
     import sparsify
@@ -245,7 +245,7 @@ def train_main(config: str, kind: str = "sae", randomize: bool = False) -> None:
 
 @app.function(image=full_image, secrets=[HF_SECRET], timeout=1200)
 def probe_sparsify() -> dict[str, str]:
-    """E4 (ADR-0004): introspect the installed EleutherAI sparsify — SAE/transcoder config + API."""
+    """E4 (ADR-0004): introspect the installed EleutherAI sparsify, SAE/transcoder config + API."""
     import dataclasses
     import importlib
     import inspect
@@ -395,7 +395,7 @@ def probe2() -> dict[str, str]:
     except Exception as exc:  # noqa: BLE001
         out["gemma2_2b"] = f"FAIL: {type(exc).__name__}: {str(exc)[:140]}"
 
-    # 2. Gemma Scope repo access (metadata only — list files, no big download).
+    # 2. Gemma Scope repo access (metadata only, list files, no big download).
     from huggingface_hub import HfApi
 
     api = HfApi()
@@ -406,7 +406,7 @@ def probe2() -> dict[str, str]:
         except Exception as exc:  # noqa: BLE001
             out[f"gemma_scope::{repo}"] = f"FAIL: {type(exc).__name__}: {str(exc)[:100]}"
 
-    # 3. sae_lens pretrained directory — find the exact gemma-scope release + sae_id strings.
+    # 3. sae_lens pretrained directory, find the exact gemma-scope release + sae_id strings.
     try:
         from sae_lens.loading.pretrained_saes_directory import get_pretrained_saes_directory
 
@@ -563,7 +563,7 @@ def gpu_smoke() -> dict[str, str]:
         free, total = torch.cuda.mem_get_info()
         out["vram_total_gib"] = f"{total / 1024**3:.1f}"
 
-    # hf-token secret may expose HF_TOKEN or HUGGING_FACE_HUB_TOKEN — accept either.
+    # hf-token secret may expose HF_TOKEN or HUGGING_FACE_HUB_TOKEN, accept either.
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     out["hf_token_present"] = str(bool(token))
     try:
@@ -671,12 +671,12 @@ def auto_interp(
 
     Uses delphi's native Gemma Scope path (verified): sparse_model='google/gemma-scope-2b-pt-res',
     hookpoint='layer_<L>/width_<W>/average_l0_<L0>'. Reports aggregate detection + fuzzing accuracy.
-    Scores from a small local scorer are NOT directly comparable to papers using frontier scorers —
+    Scores from a small local scorer are NOT directly comparable to papers using frontier scorers -
     label accordingly (R4). Capped at <=500 latents (RULES.md C3)."""
     import os
 
     # Belt-and-suspenders: also disable vLLM's flashinfer sampler via env (flashinfer is uninstalled
-    # from the image because its runtime JIT needs a CUDA toolkit this image lacks — see full_image).
+    # from the image because its runtime JIT needs a CUDA toolkit this image lacks, see full_image).
     os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
 
     import asyncio
@@ -690,7 +690,7 @@ def auto_interp(
     assert max_latents <= 500, "auto-interp cap is 500 latents (RULES.md C3)"
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
 
-    # delphi needs a concrete average_l0 dir (no 'canonical') — discover a valid one near L0~82.
+    # delphi needs a concrete average_l0 dir (no 'canonical'), discover a valid one near L0~82.
     files = HfApi().list_repo_files("google/gemma-scope-2b-pt-res", token=token)
     prefix = f"layer_{layer}/width_{width}/average_l0_"
     l0s = sorted({int(f.split(prefix)[1].split("/")[0]) for f in files if f.startswith(prefix)})
@@ -751,7 +751,7 @@ def auto_interp(
 
     # delphi score files are JSON arrays of per-example records each with one "activating" (ground
     # truth) and one "prediction" (scorer's call). Extract those booleans by regex straight from the
-    # raw text — robust to any JSON-parse quirk — and score balanced accuracy = mean(activating==pred).
+    # raw text, robust to any JSON-parse quirk, and score balanced accuracy = mean(activating==pred).
     act_re = re.compile(r'"activating":\s*(true|false)')
     pred_re = re.compile(r'"prediction":\s*(true|false)')
 
@@ -1474,7 +1474,7 @@ def probe_saebench_adapter3() -> dict:
 def probe_sparsify_encode(run_name: str = "train_gemma2_2b_l12-sae", layer: int = 12) -> dict:
     """E4 (ADR-0007 correction): does sparsify's SparseCoder.encode SUBTRACT b_dec from the input
     before the fused TopK encoder when the coder is NOT a transcode SAE? ADR-0007 v1 claimed it does
-    not (and set apply_b_dec_to_input=False); QC found the opposite. This probe reads the INSTALLED
+    not (and set apply_b_dec_to_input=False); review found the opposite. This probe reads the INSTALLED
     sparsify source AND demonstrates the shift empirically, so the fix is grounded in the real API,
     not memory. CPU-only (no GPU)."""
     import inspect
@@ -1484,7 +1484,7 @@ def probe_sparsify_encode(run_name: str = "train_gemma2_2b_l12-sae", layer: int 
 
     out: dict = {}
     out["sparsify_file"] = sparsify.__file__
-    # The encode (and any helper it delegates to) verbatim — the ground truth.
+    # The encode (and any helper it delegates to) verbatim, the ground truth.
     SC = sparsify.SparseCoder
     try:
         out["SparseCoder.encode_src"] = inspect.getsource(SC.encode)[:2000]
@@ -1509,7 +1509,7 @@ def probe_sparsify_encode(run_name: str = "train_gemma2_2b_l12-sae", layer: int 
     out["cfg.transcode"] = bool(getattr(coder.cfg, "transcode", False))
     out["cfg.skip_connection"] = bool(getattr(coder.cfg, "skip_connection", False))
     sd = coder.state_dict()
-    W_enc_T = sd["encoder.weight"]  # (d_sae, d_in) — sparsify stores encoder.weight as out x in
+    W_enc_T = sd["encoder.weight"]  # (d_sae, d_in), sparsify stores encoder.weight as out x in
     b_enc = sd["encoder.bias"]
     b_dec = sd["b_dec"]
     d_in = int(b_dec.shape[0])
@@ -2226,7 +2226,7 @@ def verify_saebench_adapter(run_name: str = "train_gemma2_2b_l12-sae", layer: in
 def _fidelity_with_b_dec_flag(coder, ref_sae, x, k, apply_b_dec: bool) -> dict:
     """Build a fresh TopKSAE from the SAME weights but with a chosen apply_b_dec_to_input, and report
     its encode-fidelity vs the real sparsify coder. Used to DEMONSTRATE that the buggy False setting
-    fails while the corrected True setting passes (the contrast the QC bug report calls for)."""
+    fails while the corrected True setting passes (the contrast the bug report calls for)."""
     from sae_lens import TopKSAE, TopKSAEConfig
     from sae_lens.saes.sae import SAEMetadata
 

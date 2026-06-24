@@ -28,8 +28,8 @@ def difference_of_means(
     concept-present inputs from concept-absent inputs.
 
     Args:
-        positive: Array of shape ``(n_pos, d)`` — activations where the concept is present.
-        negative: Array of shape ``(n_neg, d)`` — activations where the concept is absent.
+        positive: Array of shape ``(n_pos, d)``, activations where the concept is present.
+        negative: Array of shape ``(n_neg, d)``, activations where the concept is absent.
         normalize: If True, return a unit-norm direction (the default; magnitude is applied at
             steering time as a separate, tunable coefficient).
 
@@ -56,7 +56,7 @@ def difference_of_means(
     if normalize:
         norm = float(np.linalg.norm(direction))
         # Exact == 0.0 is intentional (not a < epsilon check): both inputs are class means, so the
-        # only way the difference is truly zero is exact cancellation — a genuinely undefined
+        # only way the difference is truly zero is exact cancellation, a genuinely undefined
         # direction, not floating-point noise we should silently normalize.
         if norm == 0.0:
             raise ValueError("Difference-of-means is the zero vector; cannot normalize.")
@@ -69,6 +69,6 @@ def steer_with_sae_feature(
 ) -> Any:
     """Apply an SAE-feature steering intervention to the live model and measure its effect.
 
-    CONTRACT — GPU host (E4). Compared head-to-head against :func:`difference_of_means` (R2).
+    CONTRACT, GPU host (E4). Compared head-to-head against :func:`difference_of_means` (R2).
     """
     raise pending("steer_with_sae_feature", "nnsight + dictionary_learning", "Phase 4")

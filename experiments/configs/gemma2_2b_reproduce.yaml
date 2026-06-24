@@ -1,4 +1,4 @@
-# Phase 1 reproduction (HARD GATE, RULES.md R1). Requires the GPU host (~24 GB) — Gate #1.
+# Phase 1 reproduction (HARD GATE, RULES.md R1). Requires the GPU host (~24 GB), Gate #1.
 # Loads a pretrained Gemma Scope SAE for Gemma-2-2B and reproduces a known auto-interp + SAEBench result.
 name: gemma2_2b_reproduce
 model: google/gemma-2-2b

@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Heavy ML runtime. Install on the GPU host (Python 3.11 recommended — see docs/adr/0002).
+# Heavy ML runtime. Install on the GPU host (Python 3.11 recommended, see docs/adr/0002).
 # NOTE (E4): dictionary_learning, delphi, sae-bench, and sparse-feature-circuits are installed
 # from source on the GPU host, NOT pinned here, because their exact install/API must be verified
 # against the live package before wiring (RULES.md E4). This extra lists only the PyPI-resolvable

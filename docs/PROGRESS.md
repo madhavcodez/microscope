@@ -7,7 +7,7 @@ CORE PROJECT DONE: reproduce -> train -> head-to-head -> controls -> circuit -> 
 (7B A100 unit ≈ $0.6; adapter-fix verify+eval ≈ $0.2; multi-layer circuit ≈ $0.35). FOUR conclusive results now: THREE scorer-independent
 (randomized-model control + single-layer sparse feature circuit + multi-layer cross-layer feature-set circuit)
 PLUS the novel SAE-vs-transcoder head-to-head, which RESOLVED once a strong-enough
-scorer was used — inconclusive at the 3B scorer (both CIs incl 0) but the **skip-transcoder WINS at the 7B
+scorer was used, inconclusive at the 3B scorer (both CIs incl 0) but the **skip-transcoder WINS at the 7B
 scorer** on both detection (Δ+0.053 CI[+0.016,+0.089]) and fuzzing (Δ+0.059 CI[+0.019,+0.097]); the
 recurring near-chance was a SCORER artifact (3B), not a coder limit (ai-g2-sae-7b/tc-7b). Multi-layer circuit
 (circuit-multilayer, ADR-0008): ≈9 Gemma Scope features over L5/12/19 recover 97% of the 0.944 ceiling and beat
@@ -19,14 +19,14 @@ scoped honestly as a feature-SET circuit + build-up, NOT a causal edge graph. Re
   + both Gemma-2-2B custom coders trained @ L12 (width 16384, k=64, ~10M tokens, bf16): train-g2-sae,
   train-g2-tc, saved on the artifacts Volume (identical recipe => fair head-to-head). Gemma OOM (fp32) fixed bf16+batch8.
 - **Phase 3 DONE (head-to-head = INCONCLUSIVE, pre-registered):** reconstruction SAE VE=0.514 (CI [.507,.519]);
-  transcoder own-objective recon NOT cleanly isolable externally (limitation, documented — sparsify transcode
+  transcoder own-objective recon NOT cleanly isolable externally (limitation, documented, sparsify transcode
   hooks; ForwardOutput.fvu is input-recon inflated by skip). Auto-interp (delphi, custom dicts; fixed cpu->cuda
   + fp32->bf16 loader bugs): SAE det 0.540/fuzz 0.523 (n=58) vs TC det 0.539/fuzz 0.546 (n=61); both Δ bootstrap
   CIs include 0 => no significant difference (scorer-limited, matches repro-004). SAEBench on custom coders:
-  the deferred sae_lens adapter is now BUILT + encode-verified (ADR-0007, saebench-custom-sae-v2) — custom
+  the deferred sae_lens adapter is now BUILT + encode-verified (ADR-0007, saebench-custom-sae-v2), custom
   SAE sae_top_1=0.670, BELOW Gemma Scope 0.767 AND below its own residual baseline 0.688 (honest
   budget-training result, R4); transcoder N/A (R3, resid-probing oriented). [v1 reported 0.667 with an
-  apply_b_dec_to_input bug — adapter artifact, corrected 2026-06-23; see Coder log + ADR-0007 Correction.]
+  apply_b_dec_to_input bug, adapter artifact, corrected 2026-06-23; see Coder log + ADR-0007 Correction.]
 - **Phase 4 DONE (controls = the differentiator):**
   - Control A randomized-model (ADR-0005): PRIMARY (scorer-independent) = CONCLUSIVE. SAE-feature linear probe
     on bias_in_bios professions: real-model SAE 0.933 vs random-model SAE 0.861; PAIRED gap +0.072, CI95
@@ -50,7 +50,7 @@ scoped honestly as a feature-SET circuit + build-up, NOT a causal edge graph. Re
 - Infra fns: recon_eval, auto_interp_custom, probe_coder_fvu, probe_saebench_adapter, probing_eval,
   steer_eval, circuit_eval, train --randomize. ADRs 0005 (controls) + 0006 (circuit) added.
 
-## Possible follow-ups (NOT started — optional, beyond core scope)
+## Possible follow-ups (NOT started, optional, beyond core scope)
 - ~~Calibrated Control-B steering sweep~~ DONE 2026-06-23 (ctrl-steer-v2): neutral prompt + finer grid =>
   discriminating, honestly-inconclusive (dom matches/slightly beats SAE, CI incl 0).
 - ~~sparsify->sae_lens adapter for SAEBench on the custom coders (Phase-3 SAEBench was SAE-only)~~ DONE
@@ -58,7 +58,7 @@ scoped honestly as a feature-SET circuit + build-up, NOT a causal edge graph. Re
   sae_lens.TopKSAE; full sparse_probing ran on the custom SAE => sae_top_1=0.670 (< Gemma Scope 0.767 AND
   < its own residual baseline 0.688; honest budget-training result, R4, encode-verified). Transcoder N/A
   (R3). Adapter verified before the paid run (verify_saebench_adapter: 4/4 weights, k=64 enforced, SAEBench
-  accepts, AND encode-fidelity vs sparsify coder.encode — Jaccard 1.0, cosine 1.0; the buggy =False variant
+  accepts, AND encode-fidelity vs sparsify coder.encode, Jaccard 1.0, cosine 1.0; the buggy =False variant
   fails it). [v1 had an apply_b_dec_to_input=False bug => 0.667 artifact; FIXED 2026-06-23.] Remaining:
   scale to the full 8-dataset SAEBench suite.
 - ~~Stronger auto-interp scorer (the near-chance bottleneck throughout)~~ RESOLVED 2026-06-23
@@ -71,7 +71,7 @@ scoped honestly as a feature-SET circuit + build-up, NOT a causal edge graph. Re
   SCORER artifact, not a coder limit. HEAD-TO-HEAD FLIPS: 3B both CIs incl 0 (inconclusive) -> 7B
   transcoder WINS on BOTH (det TC-SAE +0.053 CI[+0.016,+0.089]; fuzz +0.059 CI[+0.019,+0.097], both excl 0;
   same unpaired diff-of-means bootstrap seed0/10k as ai-g2). Confirms the pre-registered "transcoders beat
-  SAEs" direction on the interpretability axis (full Pareto-dominance still open — TC reconstruction not
+  SAEs" direction on the interpretability axis (full Pareto-dominance still open, TC reconstruction not
   isolable). Recompute: scripts/headtohead_autointerp.py.
 - ~~Multi-layer (cross-component) circuit via sparse-feature-circuits.~~ DONE 2026-06-23
   (circuit-multilayer, ADR-0008) as a **cross-layer feature-SET circuit + depth build-up** (NOT the
@@ -86,10 +86,10 @@ scoped honestly as a feature-SET circuit + build-up, NOT a causal edge graph. Re
   L5+L12 0.939, L5+L12+L19 0.939 => concept accumulates by mid-depth (L5->L12) and saturates (L19 adds
   +0.000). Caveat: same token-influence as Control A. ~$0.35 GPU (1 E4 probe + 1 import-fail + 1 real
   run, all L4, ~13 min). infra fn: multilayer_circuit_eval + multilayer_circuit_main entrypoint.
-- Feature->feature causal cross-layer EDGE graph (attribution patching / sparse-feature-circuits) — the
+- Feature->feature causal cross-layer EDGE graph (attribution patching / sparse-feature-circuits), the
   heavier version; this unit built the feature-set + build-up, not the edge graph (R4).
 
-## Phase 3 pre-registration (R3 — COMMITTED 2026-06-22 BEFORE any eval run; do not change post-hoc)
+## Phase 3 pre-registration (R3, COMMITTED 2026-06-22 BEFORE any eval run; do not change post-hoc)
 - **Coders compared:** train-g2-sae vs train-g2-tc (Gemma-2-2B L12, width 16384, k=64, identical recipe).
 - **Feature sample:** 100 latents, drawn uniformly without replacement from range(16384) via
   `numpy.random.default_rng(0).choice(16384, 100, replace=False)`. The SAME 100 indices are used for
@@ -97,13 +97,13 @@ scoped honestly as a feature-SET circuit + build-up, NOT a causal edge graph. Re
 - **Auto-interp metrics (delphi, LOCAL Qwen2.5-3B-Instruct scorer, no API):** detection accuracy +
   fuzzing accuracy, aggregate over the 100 latents. (Intruder = optional stretch only if it wires
   cleanly + budget allows; not committed.) Reported with bootstrap 95% CIs.
-- **Reconstruction metric:** each coder's FVU / variance-explained on ITS OWN objective — SAE on
+- **Reconstruction metric:** each coder's FVU / variance-explained on ITS OWN objective, SAE on
   resid_post@L12, transcoder on MLP-out@L12 (from MLP-in). Labeled as each-on-own-target (they are not
   the same target; this is the Transcoders-Beat-SAEs framing, not a like-for-like resid comparison).
 - **SAEBench:** sparse_probing (validated in repro-003). absorption ONLY if it runs cleanly on the
   custom coder. NOTE: a SAEBench eval may be SAE-only; if it cannot evaluate the transcoder, that metric
   is N/A for the transcoder (documented, not faked) and the head-to-head for it leans on auto-interp+recon.
-- **Hypothesis (reference, to CONFIRM or REFUTE — NOT assumed):** the skip-transcoder Pareto-dominates
+- **Hypothesis (reference, to CONFIRM or REFUTE, NOT assumed):** the skip-transcoder Pareto-dominates
   the SAE on the interpretability-vs-reconstruction frontier (Transcoders-Beat-SAEs).
 - **Significance:** every reported SAE-vs-transcoder delta gets a bootstrap 95% CI over the 100-latent
   sample; a difference is only called real if the CI excludes zero (recall repro-004's 0.544 vs 0.529
@@ -118,27 +118,26 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
 - Repo created at C:\Users\madha\microscope; `git init`; local author `madhavcodez
   <madhavcbusiness@gmail.com>`; gpgsign off. GitHub: https://github.com/madhavcodez/microscope
   (private), `main` pushed.
-- All memory files (CLAUDE.md, docs/RULES.md, PROGRESS.md, EXPERIMENTS.md, REPORT.md, adr/0000),
+- All project docs (docs/RULES.md, PROGRESS.md, EXPERIMENTS.md, REPORT.md, adr/0000),
   ADR-0001 (model+tooling), ADR-0002 (Python 3.11 pin + GPU-host gate), SETUP_GPU.md runbook.
-- Agent definitions: .claude/agents/{coder,tester,quality-checker}.md.
 - pyproject.toml (base installs clean on CPU; ML stack in [gpu] extra), README, LICENSE,
   .gitattributes (LF for demo.sh), example configs, scripts/demo.sh.
 - src/microscope: config.py (seeds/determinism/config-hash/RunRecord+EXPERIMENTS logging), Typer
   cli.py (7 stages), stage contracts as honest E4 stubs, real difference-of-means baseline.
-- FOUNDATION UNIT through the agent loop (tester -> 2x quality-checker -> orchestrator merge):
+- FOUNDATION UNIT (tested + integrity-checked + merged):
   74 tests, 95% coverage, ruff clean, ruff-format clean, mypy clean. Verified: pip install -e .,
   microscope info/--help, determinism, stable config hash.
 
 ## In progress
-- (nothing — PAUSED after Phase 1 per user instruction)
+- (nothing, PAUSED after Phase 1 per user instruction)
 
 ## Blocked / needs human
-- **GATE #1 — RESOLVED.** Platform = **Modal** (existing creds + hf-token secret + credits). GPU =
+- **GATE #1, RESOLVED.** Platform = **Modal** (existing creds + hf-token secret + credits). GPU =
   L4 24GB (~$0.80/hr, per-second billed → no idle burn). HARD cap **$30**; tightened run-gate
   (~$5/90min). Local scorer. Gemma-2-2B license accepted (account madhavc123). ADR-0003. Spend ≈ $3.
 - (nothing currently blocking)
 
-## Next (Phase 2 — when resuming; NOT started)
+## Next (Phase 2, when resuming; NOT started)
 1. **First answer the open question (PHASE1_RETROSPECTIVE §4.2):** does dictionary_learning 0.1.0
    support a skip-transcoder? Introspect on Modal before committing to the SAE+transcoder deliverable.
 2. Phase 2: train a custom SAE (+ transcoder if supported). SMOKE on Pythia-70M first (cheap), then a
@@ -146,13 +145,13 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
 3. Optional polish to fully close Phase 1 to paper-grade: scale SAEBench to 8 datasets × k{1,2,5}
    (repro-003 was a single-dataset smoke); larger auto-interp feature sample + stronger scorer if the
    absolute auto-interp number matters (it is currently labeled inconclusive by design).
-4. Then Phases 3-6 through the coder->tester->quality-checker loop, logging cost_est each run (≤$30).
+4. Then Phases 3-6 through the implement->test->integrity-check loop, logging cost_est each run (≤$30).
 
 ## Current task spec
-- (orchestrator fills this per unit of work)
+- (filled in per unit of work)
 
 ## Test log
-- 2026-06-21 (tester): Wrote the CPU-verifiable pytest suite under tests/ (8 files, 71 tests,
+- 2026-06-21: Wrote the CPU-verifiable pytest suite under tests/ (8 files, 71 tests,
   AAA style). Covers config.set_seed determinism (numpy + python random reproduce on same seed,
   diverge on different), config_hash (stable / key-order-insensitive / value-sensitive / 12-char
   hex), load_config (real config / FileNotFoundError / ValueError on non-mapping+empty+scalar YAML),
@@ -169,28 +168,28 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
   CUDA-present branch in hardware_info, git OSError catch) plus cli.py's green-success path and
   __main__ guard. No source bugs found; the CPU-verifiable code behaves exactly as documented.
 
-## QC log
-- 2026-06-21 (quality-checker x2 — research-integrity + python code-quality, run via workflow):
+## Quality-check log
+- 2026-06-21 (research-integrity + python code-quality review):
   Integrity verdict APPROVE; code-quality verdict REQUEST-CHANGES (lint/type-hint only). Findings
-  and orchestrator resolution:
+  and resolution:
   - [HIGH, integrity] C3 ≤500-feature cap was NOT enforced on the randomized-model control path
     (unbounded-spend back door once implemented). FIXED: eval/controls.randomized_model_control now
     enforces MAX_FEATURES_PER_RUN with a ValueError + regression test added.
   - [MEDIUM, integrity] R1 reproduction-first is documented/sequenced but not mechanically gated in
-    code. DEFERRED with explicit note (QC agreed acceptable): once Phase-1 stages are implemented on
+    code. DEFERRED with explicit note (accepted in review): once Phase-1 stages are implemented on
     the host, add a check that a 'reproduced' row exists in EXPERIMENTS.md before `train` runs.
     Tracked here so it is not forgotten.
-  - [code-quality] B008 (Typer idiom), UP035, I001, E501 (37 nits): FIXED — collections.abc imports,
+  - [code-quality] B008 (Typer idiom), UP035, I001, E501 (37 nits): FIXED, collections.abc imports,
     `_run_stage` typed, per-file B008 ignore for cli.py, `ruff check --fix` + `ruff format`, banner
     comments stripped, prose wrapped. ruff now passes; mypy clean.
   - [coverage] project_root cwd-fallback + git_commit OSError branch were untested (CPU-reachable):
     tests added; config.py 88%->91%, total 95%.
   - Re-verified post-fix: 74 passed, 95% coverage, ruff/format/mypy all clean.
 
-## Coder log
-- 2026-06-22 (coder): Implemented the previously-DEFERRED R1 mechanical gate (closes the MEDIUM
-  integrity item in the QC log above). Pure-CPU, stdlib-only, no new deps.
-  - config.py: added `reproduction_logged(path: Path | None = None) -> bool` — parses
+## Work log
+- 2026-06-22: Implemented the previously-DEFERRED R1 mechanical gate (closes the MEDIUM
+  integrity item in the quality-check log above). Pure-CPU, stdlib-only, no new deps.
+  - config.py: added `reproduction_logged(path: Path | None = None) -> bool`, parses
     EXPERIMENTS.md, finds the `| run_id` header, locates the column whose header contains 'label',
     scans data rows (skips the `|---` separator), returns True iff any label cell contains
     'reproduced' (case-insensitive, substring). Missing file / no data rows -> False (fail closed).
@@ -199,25 +198,25 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
   - cli.py: `train` now calls `reproduction_logged()` BEFORE `_prepare`/`_run_stage`; if False it
     prints a red message naming RULES.md R1 and `raise typer.Exit(code=3)`. Exit code 3 = R1 gate
     (distinct from code 2 = GPU/E4 gate). Imported `reproduction_logged` from `.config`.
-  - Gate currently PASSES (EXPERIMENTS.md has reproduced rows repro-001/002/003) — verified
+  - Gate currently PASSES (EXPERIMENTS.md has reproduced rows repro-001/002/003), verified
     `reproduction_logged()` returns True. Verified via Typer CliRunner: train with an empty/no-repro
     table -> exit 3 + R1 message + `_prepare` NOT reached; train with real table -> R1 passes
     through to the existing exit-2 GPU/E4 gate (unregressed).
   - Checks: `python -c "import microscope.cli"` OK; full pytest 94 passed; ruff check + ruff format
-    + mypy all clean on config.py + cli.py. NOTE: did NOT add unit tests (tester's unit). Coverage
-    of the new branches is currently exercised only by my ad-hoc CliRunner check, not the committed
-    suite — tester must add regression tests (see handoff). Did not commit (per instruction).
-- 2026-06-22 (coder): Phase 2 unit 1 — sparsify training wrapper + training YAMLs (ADR-0004). No
+    + mypy all clean on config.py + cli.py. NOTE: unit tests still to add. Coverage
+    of the new branches is currently exercised only by an ad-hoc CliRunner check, not the committed
+    suite; regression tests still to add (see handoff). Did not commit (per instruction).
+- 2026-06-22: Phase 2 unit 1, sparsify training wrapper + training YAMLs (ADR-0004). No
   training run here (that is unit 2 on Modal). Heavy imports kept lazy; package still imports on CPU.
   - src/microscope/saes/train.py REWRITTEN (was a `pending` stub):
-    * `coder_config_dict(config, kind) -> dict[str, Any]` — PURE (no sparsify/torch import); the
+    * `coder_config_dict(config, kind) -> dict[str, Any]`, PURE (no sparsify/torch import); the
       TESTABLE CORE. Maps RunConfig (+extra='allow' keys width/k/activation/batch_size/lr/save_dir/
       run_name) to a flat sparsify-settings dict. THE KEY INVARIANT: SAE => transcode=False &
       skip_connection=False; transcoder => both True; width(=>num_latents) and k(=>TopK L0) come from
       the SAME config so SAE vs skip-transcoder is a fair head-to-head. Validates: kind in
       {sae,transcoder}, width & k present + positive int (coerces "64"/64.0), activation in
-      {topk,groupmax}, layer not None, lr/batch_size sane — all raise ValueError (fail fast).
-    * `train_coder(config, kind) -> dict[str, Any]` — GPU-only. Validates via coder_config_dict
+      {topk,groupmax}, layer not None, lr/batch_size sane, all raise ValueError (fail fast).
+    * `train_coder(config, kind) -> dict[str, Any]`, GPU-only. Validates via coder_config_dict
       FIRST (fail fast on CPU before the GPU import), then lazy `import sparsify`; on ImportError
       raises `GpuStackUnavailable` naming the Modal [gpu] image (mirrors
       activations.harvest_resid_activations, NOT GpuImplementationPending). Builds SaeConfig +
@@ -232,17 +231,17 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
     k 32, n_tokens 500k) and `train_gemma2_2b_l12.yaml` (gemma-2-2b, layer 12, width 16384, k 64,
     n_tokens 10M with a comment that the exact budget is cost-gated in unit 3). One YAML per model;
     `--kind` flips SAE/transcoder (DRY; same width/k = fair). Both point to ADR-0004. (Left the OLD
-    pythia70m_smoke.yaml / gemma2_2b_reproduce.yaml untouched — those are the Phase-1 reproduce
+    pythia70m_smoke.yaml / gemma2_2b_reproduce.yaml untouched, those are the Phase-1 reproduce
     configs.)
   - Checks: both required CPU imports OK (`import microscope.cli`,
     `from microscope.saes.train import coder_config_dict`); ruff + ruff format + mypy CLEAN on
     train.py; ad-hoc CPU runs confirm the invariant (SAE F/F, transcoder T/T, shared width/k), every
     validation path raises ValueError, both YAMLs load + hash + flow through coder_config_dict, and
-    train_coder raises GpuStackUnavailable (sparsify absent) — and ValueError before the gate on a
-    config missing width/k. Did NOT add/modify tests (tester's unit). Did not commit (per instruction).
-  - HANDOFF / tester must update 5 pre-existing tests that pinned the OLD stub contract (these are
-    EXPECTED contract changes, not source bugs — same transition reproduce/harvest already made):
-    (1) tests/test_pending.py::test_train_coder_stub_raises_pending — train_coder no longer raises
+    train_coder raises GpuStackUnavailable (sparsify absent), and ValueError before the gate on a
+    config missing width/k. Did NOT add/modify tests (separate step). Did not commit (per instruction).
+  - HANDOFF / tests to update: 5 pre-existing tests that pinned the OLD stub contract (these are
+    EXPECTED contract changes, not source bugs, same transition reproduce/harvest already made):
+    (1) tests/test_pending.py::test_train_coder_stub_raises_pending, train_coder no longer raises
     GpuImplementationPending; it now raises GpuStackUnavailable (and ValueError first on a config
     without width/k). (2-5) tests/test_cli.py::test_train_with_valid_config_surfaces_gpu_gate and
     tests/test_reproduction_gate.py::{test_train_passes_r1_then_hits_gpu_gate_exit_2_via_real_parser,
@@ -252,8 +251,8 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
     train invocations at the NEW train_pythia70m_smoke.yaml (has width+k) so they pass validation and
     reach the exit-2 GPU gate, OR assert the new validation behaviour. The R1 exit-3 tests
     (gate-shut) are unaffected and still pass (R1 fires before train_coder).
-- 2026-06-23 (coder): RECALIBRATED Control-B steering (`steer_eval` in infra/modal_app.py) so it
-  discriminates instead of returning the degenerate baseline-ceiling result. CALIBRATION FIX ONLY —
+- 2026-06-23: RECALIBRATED Control-B steering (`steer_eval` in infra/modal_app.py) so it
+  discriminates instead of returning the degenerate baseline-ceiling result. CALIBRATION FIX ONLY -
   same ADR-0005 pre-registered metric (success-rate-under-fluency) + concept (bias_in_bios prof 21 vs
   19, steer->19), so NOT a new Gate-4 decision (stated in docstring + EXPERIMENTS notes).
   - steer_eval edited in place: (1) NEUTRAL-prompt scan over 6 candidates ["I","The","This person",
@@ -262,7 +261,7 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
     re-measured at full n_gen). (2) FINER grid coefs=[0.5,1,2,3,4]xresid_rms (was [2,4,8]). (3) Reports
     success AND ppl at EVERY coef for BOTH directions (full sweep incl coef0), each direction's best
     FLUENCY-PRESERVING coef, the steering EFFECT (success-baseline), and bootstrap CI95 on SAE-minus-dom
-    with an explicit R4 honest verdict. E1: logs+sets seed (np/torch/cuda) — `seed` param, default 0.
+    with an explicit R4 honest verdict. E1: logs+sets seed (np/torch/cuda), `seed` param, default 0.
   - RAN on Modal L4 (PYTHONUTF8=1, ~30 min, ~$0.45, 1 GPU run, exit 0). RESULT (ctrl-steer-v2):
     chosen prompt 'This person' baseline_success=0.562 (vs 'My favorite'/'I' = 1.0 ceilings), ppl 9.18,
     fluency cap 13.76. SAE feature best=coef0.5 success 0.875 (effect +0.312); dom best=coef0.5 success
@@ -274,13 +273,13 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
     bar). No new callers/tests reference steer_eval's signature. Updated EXPERIMENTS.md (annotated old
     ctrl-steer as SUPERSEDED + added ctrl-steer-v2 row), REPORT.md (Control B section + summary table),
     README (steering row), PROGRESS.md. COMMITTED on main.
-  - HANDOFF / tester: this is a Modal-GPU control fn (not CPU-unit-testable end-to-end). Verify
+  - HANDOFF / verification: this is a Modal-GPU control fn (not CPU-unit-testable end-to-end). Verify
     (a) py_compile/import of infra/modal_app.py; (b) the numbers in the docs match output line 54-55 of
     the run (STEER RESULT + BY DIR) and /root/outputs/steering.json on the artifacts volume; (c) the
     metric/concept are unchanged vs ADR-0005 (only prompt + coef grid + reporting changed); (d) the CI
     [-0.25,+0.125] includes 0 => 'inconclusive' label is correct (R4). A re-run with the same seed
     should reproduce (E1), modulo any nondeterminism in CUDA sampling.
-- 2026-06-23 (coder): STRONGER-SCORER attempt for the auto-interp head-to-head (the near-chance
+- 2026-06-23: STRONGER-SCORER attempt for the auto-interp head-to-head (the near-chance
   bottleneck). Tried a LOCAL Qwen2.5-7B-Instruct on auto_interp_custom for the SAE coder; STOPPED with
   NO RESULT after 2 GPU startup failures (retry cap; ~$0.15, both died at vLLM engine init before any
   scoring). The 3B head-to-head is UNCHANGED and remains the reported Phase-3 result (R4: the
@@ -294,7 +293,7 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
     "base model freed after caching" assumption in the old code comment (now corrected).
   - CODE (infra/modal_app.py auto_interp_custom, backward-compatible, CPU py_compile + ruff clean on my
     lines): (1) added `max_memory: float = 0.5` param (was hard-coded 0.5) so the vLLM budget is tunable
-    for the eventual fix; (2) anti-clobber output filename — derive a scorer_tag from scorer_model; the
+    for the eventual fix; (2) anti-clobber output filename, derive a scorer_tag from scorer_model; the
     default 3B writes the historical autointerp_<tag>.json, a non-default scorer writes
     autointerp_<tag>_<scorer_tag>.json (verified: 3B->autointerp_sae.json, 7B->autointerp_sae_7b.json),
     so a future 7B run will NOT overwrite the 3B results on the volume; (3) logged seed=0 + scorer_tag +
@@ -302,18 +301,18 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
     BLOCKER honestly (R4) instead of the wrong "base model freed" claim. No production scorer switch (still
     local, C1). Updated EXPERIMENTS.md (ai-g2-7b-ATTEMPT row, label inconclusive(no result), no fake
     scores per R5), REPORT.md (Phase-3 "Scorer-strength check" note), PROGRESS.md.
-  - HANDOFF / tester: CPU-verifiable parts only. Verify (a) py_compile infra/modal_app.py; (b) the
+  - HANDOFF / verification: CPU-verifiable parts only. Verify (a) py_compile infra/modal_app.py; (b) the
     filename derivation: scorer_model="Qwen/Qwen2.5-3B-Instruct" -> out_suffix="" (autointerp_<tag>.json);
     any other scorer -> "_<scorer_tag>" (7B -> _7b); (c) the 3B results on the volume are untouched
     (autointerp_sae.json/autointerp_tc.json still present, scorer=Qwen2.5-3B); (d) no fabricated 7B
     scores anywhere in the docs (R5). The 7B run itself is NOT reproducible until the base-model-free fix
-    lands — it is a documented Gate (free base model from cuda before scoring, or a >24 GiB GPU).
-- 2026-06-23 (coder): RESOLVED the stronger-scorer question by running the 7B on an A100-40GB (where the
+    lands, it is a documented Gate (free base model from cuda before scoring, or a >24 GiB GPU).
+- 2026-06-23: RESOLVED the stronger-scorer question by running the 7B on an A100-40GB (where the
   resident Gemma base model + 7B vLLM scorer coexist), which the L4 could not fit. This ANSWERS the
   scorer-strength question the ATTEMPT left open, and FLIPS the Phase-3 head-to-head.
   - CODE (infra/modal_app.py): refactored auto_interp_custom's body into a GPU-agnostic helper
     `_auto_interp_impl(...)`; kept `auto_interp_custom` (gpu="L4", 3B scorer, max_memory=0.5) as a thin
-    wrapper (backward-compatible — historical ai-g2 path unchanged); added `auto_interp_custom_a100`
+    wrapper (backward-compatible, historical ai-g2 path unchanged); added `auto_interp_custom_a100`
     (gpu="A100-40GB", default scorer Qwen2.5-7B, max_memory=0.65) calling the same helper; added an
     `autointerp_main` local_entrypoint (--gpu a100|l4, config-driven, enforces the C3 <=500 cap). Verified
     Modal's A100-40GB GPU string against the installed `modal` 1.4.2 (parse_gpu_config uppercases + sends
@@ -323,56 +322,56 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
     file's pre-existing E501 etc remain); 170 CPU tests still pass (infra not imported by the package).
   - RAN (E1, seed 0 logged): both coders, scorer Qwen/Qwen2.5-7B-Instruct, max_latents=100, A100-40GB,
     PYTHONUTF8=1. The 7B's 14.29 GiB weights loaded next to the ~6 GiB resident base model and both runs
-    completed cleanly (~8 min each, ~$0.6 total GPU — under the unit's $5 cap). Pulled
+    completed cleanly (~8 min each, ~$0.6 total GPU, under the unit's $5 cap). Pulled
     autointerp_sae_7b.json / autointerp_tc_7b.json via `modal volume get`; verified the 3B jsons
     (autointerp_sae/tc.json) are UNTOUCHED (no clobber) and the 7B jsons log seed/scorer_tag/max_memory (E3).
-  - RESULT (real, R5 — no fabrication): SAE det 0.6072/fuzz 0.6309 (n=58); TC det 0.6602/fuzz 0.6895 (n=60).
+  - RESULT (real, R5, no fabrication): SAE det 0.6072/fuzz 0.6309 (n=58); TC det 0.6602/fuzz 0.6895 (n=60).
     Both far above the 3B near-chance => scorer artifact confirmed. Recomputed the head-to-head with
-    scripts/headtohead_autointerp.py (unpaired diff-of-means bootstrap, seed 0, 10k resamples — the SAME
+    scripts/headtohead_autointerp.py (unpaired diff-of-means bootstrap, seed 0, 10k resamples, the SAME
     method as ai-g2; validated by reproducing the 3B CIs exactly before adding 7B). 3B: det Δ(TC-SAE)+0.001
     CI[-0.022,+0.022], fuzz +0.023 CI[-0.001,+0.047] (both incl 0). 7B: det +0.053 CI[+0.016,+0.089], fuzz
     +0.059 CI[+0.019,+0.097] (both EXCLUDE 0) => transcoder significantly more interpretable on both.
     VERDICT (R4): 7B raised scores above chance AND changed the conclusion (inconclusive -> transcoder wins);
     confirms the pre-registered Transcoders-Beat-SAEs direction on the interpretability axis (full
-    Pareto-dominance still open — TC own-objective reconstruction not externally isolable).
+    Pareto-dominance still open, TC own-objective reconstruction not externally isolable).
   - DOCS: EXPERIMENTS.md (ai-g2-sae-7b + ai-g2-tc-7b rows with real scores; ai-g2-7b-ATTEMPT annotated
     RESOLVED), REPORT.md (Phase-3 table + verdict + scorer-strength note + abstract + summary table all
     updated to scorer-dependent/transcoder-wins), README (results table + bottom line + Phase-3 commands),
     PROGRESS (this). New scripts/headtohead_autointerp.py (CPU, numpy-only). .gitignore: artifacts_pull/.
     COMMITTED on main.
-  - HANDOFF / tester: (a) py_compile infra/modal_app.py + the 3 new fns exist (impl + 2 wrappers + entrypoint);
+  - HANDOFF / verification: (a) py_compile infra/modal_app.py + the 3 new fns exist (impl + 2 wrappers + entrypoint);
     (b) `python scripts/headtohead_autointerp.py --dir artifacts_pull` reproduces 3B CIs exactly (matches the
     ai-g2 row) AND the 7B CIs both exclude 0; (c) the numbers in EXPERIMENTS/REPORT/README match the JSONs on
     the volume (modal volume ls microscope-artifacts | autointerp_*_7b.json) and the FINAL AUTO-INTERP RESULT
     lines; (d) 3B jsons untouched (no clobber); (e) no fabricated numbers (R5); (f) ruff adds no NEW non-E501
     issues vs the pre-existing baseline; 170 tests still pass. A 7B re-run with the same seed should
     reproduce modulo CUDA-sampling nondeterminism (E1).
-- 2026-06-23 (coder): Built the sparsify->sae_lens adapter + ran the FULL SAEBench sparse_probing on the
-  CUSTOM SAE — the last deferred Phase-3 item (ADR-0007). E4-first: ran probe_saebench_adapter (already in
+- 2026-06-23: Built the sparsify->sae_lens adapter + ran the FULL SAEBench sparse_probing on the
+  CUSTOM SAE, the last deferred Phase-3 item (ADR-0007). E4-first: ran probe_saebench_adapter (already in
   the file) + added probe_saebench_adapter2/_adapter3/_datasets to pin the exact API on Modal before any
   code (sae_lens 6.44.3: TopKSAE + TopKSAEConfig + SAEMetadata at sae_lens.saes.sae; cfg.hook_name resolves
   from metadata; load_and_format_sae for a custom object only check_decoder_norms[warns]+_standardize_sae_cfg).
   - CODE (infra/modal_app.py, all my lines ruff-CLEAN incl. no new E501): `_sparsify_to_topk_sae(coder_dir,
-    layer, device, dtype='float32')` helper — loads the sparsify SparseCoder, raises on transcode/skip
+    layer, device, dtype='float32')` helper, loads the sparsify SparseCoder, raises on transcode/skip
     (R3), builds a real sae_lens.TopKSAE (W_enc=encoder.weight.T, b_enc=encoder.bias, W_dec/b_dec copied,
     k=64, apply_b_dec_to_input=False to match sparsify, metadata=hook_name/layer/model). `verify_saebench_adapter`
     (cheap GPU pre-flight, E4) + `saebench_sparse_probing_custom` (full eval, same config as repro-003,
     seed 42 set+logged E1). Plus 3 CPU E4 probes (adapter2/3/datasets).
-  - RAN (Modal, PYTHONUTF8=1): (1) verify_saebench_adapter L4 ~1 min — 4/4 weights load, k=64 enforced
+  - RAN (Modal, PYTHONUTF8=1): (1) verify_saebench_adapter L4 ~1 min, 4/4 weights load, k=64 enforced
     exactly, SAEBench load_and_format_sae ACCEPTS the object, cfg.hook_name/layer/model all resolve. (2)
     First full run KeyError'd on bare 'LabHC/bias_in_bios' (SAEBench build keys it '..._class_set1', E4
     probe_saebench_datasets); fixed the dataset key (matches repro-003's actual key). (3) Re-ran full eval
-    L4 ~6 min, exit 0. ~3 GPU iterations total (verify + 2 eval), ~$0.7 GPU all-in — under the $4 cap.
-  - RESULT (real, R5 — no fabrication): sae_top_1=0.6668; residual(llm) baseline top_1=0.6876; full-feat
+    L4 ~6 min, exit 0. ~3 GPU iterations total (verify + 2 eval), ~$0.7 GPU all-in, under the $4 cap.
+  - RESULT (real, R5, no fabrication): sae_top_1=0.6668; residual(llm) baseline top_1=0.6876; full-feat
     sae=0.9532/llm=0.9648. HONEST (R4): budget SAE 0.667 < Gemma Scope 0.767 AND < its own residual baseline
-    0.688 — on this single-dataset top-1 probe the budget SAE's best feature does NOT beat the raw residual
+    0.688, on this single-dataset top-1 probe the budget SAE's best feature does NOT beat the raw residual
     (opposite of repro-003). Expected from the ~10M-token budget (recon VE 0.51). Baseline 0.688 ==
     repro-003's 0.688 (SAE-independent) => eval sound + apples-to-apples. Transcoder N/A (R3). Decoder-norm
     note: mean row norm ~1.004, a few rows ~0.07 off => check_decoder_norms warns (does not raise).
   - DOCS: ADR-0007 (new), EXPERIMENTS.md (saebench-custom-sae row), REPORT.md (Phase-3 table row + new
     SAEBench subsection + scope-table row + follow-ups status), PROGRESS (this + Phase-3 bullet + follow-up).
     result json: /root/outputs/saebench_custom_sae.json on the microscope-artifacts volume. COMMITTED on main.
-  - HANDOFF / tester: (a) py_compile infra/modal_app.py; the 5 new fns exist (_sparsify_to_topk_sae helper,
+  - HANDOFF / verification: (a) py_compile infra/modal_app.py; the 5 new fns exist (_sparsify_to_topk_sae helper,
     verify_saebench_adapter, saebench_sparse_probing_custom, + CPU probes adapter2/3/datasets); (b) ruff
     adds no NEW non-E501 issue on my lines (>=line ~1907) vs baseline; 170 CPU tests still pass (infra not
     imported by the package); (c) the numbers in EXPERIMENTS/REPORT/ADR-0007 match saebench_custom_sae.json
@@ -380,12 +379,12 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
     CUSTOM-SAE RESULT stdout line; (d) the residual baseline (0.688) matches repro-003's (SAE-independent
     sanity check); (e) no fabricated numbers (R5); the 0.667<0.688 below-baseline result is reported as-is.
     A re-run with seed 42 + same config should reproduce (modulo minor GPU nondeterminism, E1).
-- 2026-06-23 (coder): FIXED a CRITICAL adapter encode bug found by QC + RE-RAN. ADR-0007 v1 set
+- 2026-06-23: FIXED a CRITICAL adapter encode bug found in review + RE-RAN. ADR-0007 v1 set
   `apply_b_dec_to_input=False` in `_sparsify_to_topk_sae` on the premise that sparsify's TopK encode does
   not subtract b_dec. That premise was FACTUALLY WRONG, so v1's sae_top_1=0.667 was an adapter artifact.
   - E4 FIRST (probe_sparsify_encode, NEW): read the INSTALLED sparsify `SparseCoder.encode` verbatim on
     Modal => `if not self.cfg.transcode: x = x - self.b_dec` then fused_encoder. Coder under test has
-    cfg.transcode=False (b_dec norm ≈ 90.7), so sparsify's true encode is `(x−b_dec)@Wencᵀ+b_enc` while the
+    cfg.transcode=False (b_dec norm ≈ 90.7), so sparsify's true encode is `(x-b_dec)@Wencᵀ+b_enc` while the
     buggy adapter did `x@Wencᵀ+b_enc`. Confirmed `- self.b_dec` present in source.
   - FIX (infra/modal_app.py): (1) `_sparsify_to_topk_sae` now sets `apply_b_dec_to_input=True` (b_dec is
     copied into the SAE, so sae_lens applies the same shift) + corrected comment. (2) NEW encode-fidelity
@@ -398,7 +397,7 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
   - RAN (Modal L4, PYTHONUTF8=1, seed logged E1): verify_saebench_adapter => encode-fidelity PASSES with
     True (random: Jaccard 1.0 all 8 rows, max abs diff 6e-6, cosine 1.0; real-resid: Jaccard 1.0 all 16
     rows, max abs diff 7.6e-5, cosine 1.0) and the False variant FAILS the SAME check (Jaccard ≈ 0.07,
-    cosine 0.139) — this is the check that would have caught the bug. Then saebench_sparse_probing_custom
+    cosine 0.139), this is the check that would have caught the bug. Then saebench_sparse_probing_custom
     => CORRECTED sae_top_1=0.670 (vs buggy 0.667), baseline 0.6876 UNCHANGED (SAE-independent, == repro-003),
     full-feat 0.9496. ~$0.2 GPU total (1 verify + 1 eval), under the $3 cap. The +0.003 move shows a top-1
     best-single-feature probe is robust to which near-equivalent budget latents win; the result now rests on
@@ -407,15 +406,15 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
   - DOCS: ADR-0007 (Correction section + premise corrected + fidelity = real correctness evidence),
     EXPERIMENTS.md (v1 row annotated BUGGY/superseded + new saebench-custom-sae-v2 row), REPORT.md (table
     rows + SAEBench subsection + adapter-correctness paragraph + status), README, PROGRESS (this). COMMITTED on main.
-  - HANDOFF / tester: (a) py_compile infra/modal_app.py; the new helpers + probe_sparsify_encode exist and
-    are NOT @app.function-decorated (helpers must stay plain — a misplaced decorator caused a first-run
+  - HANDOFF / verification: (a) py_compile infra/modal_app.py; the new helpers + probe_sparsify_encode exist and
+    are NOT @app.function-decorated (helpers must stay plain, a misplaced decorator caused a first-run
     'Function not callable', since fixed); (b) ruff adds no NEW non-E501 issue on my lines vs baseline;
     170 CPU tests still pass (infra not imported by the package); (c) numbers in EXPERIMENTS/REPORT/README/
     ADR-0007 match saebench_custom_sae.json (sae_top_1 0.670) AND saebench_adapter_verify.json
     (encode_fidelity_PASS True) on the volume; (d) the False-variant contrast in the verify json FAILS
     (proves the check is real); (e) no fabricated numbers (R5). Re-run with seed 42 reproduces modulo GPU
     nondeterminism (E1).
-- 2026-06-23 (coder): Built the MULTI-LAYER circuit — the deferred extension of the single-layer
+- 2026-06-23: Built the MULTI-LAYER circuit, the deferred extension of the single-layer
   circuit-g2-sae (ADR-0008, NEW). Pre-registered the method in ADR-0008 BEFORE running (R3).
   - SCOPE (R4, stated up front): a cross-layer feature-SET circuit + depth build-up, NOT a
     feature->feature causal EDGE graph (the heavier attribution-patching / sparse-feature-circuits
@@ -425,8 +424,8 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
     DENSE (n_tokens, 16384) tensor (NOT the sparsify TopK tuple) on the TransformerLens resid_post recipe
     (BOS excluded). This is why the fn uses the reproduce_recon recipe, NOT circuit_eval's sparsify path
     (raw HF acts gave VE -4.5 for Gemma Scope, ADR-0003).
-  - CODE (infra/modal_app.py): `multilayer_circuit_eval` (image=pkg_image — needs BOTH transformer_lens
-    [in base] AND sklearn [in the full interp image; base lacks it — first run crashed at sklearn import,
+  - CODE (infra/modal_app.py): `multilayer_circuit_eval` (image=pkg_image, needs BOTH transformer_lens
+    [in base] AND sklearn [in the full interp image; base lacks it, first run crashed at sklearn import,
     fixed by switching base_image->pkg_image]) + `multilayer_circuit_main` local entrypoint. Per layer:
     run_with_cache(resid_post, stop_at_layer=L+1), drop BOS, sae.encode (dense), mean-pool per example.
     Attribution = |mean_act(c1)-mean_act(c0)| per layer (probe-independent); circuit = union of per-layer
@@ -447,12 +446,12 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
   - DOCS: ADR-0008 (new), EXPERIMENTS.md (circuit-multilayer row), REPORT.md (Phase-5 multi-layer
     subsection + scope-table row + summary sentence + status follow-up update), README (results row +
     Phase-5 command), PROGRESS (this + follow-up marked done). COMMITTED on main.
-  - HANDOFF / tester: (a) py_compile infra/modal_app.py; the 2 new fns exist (multilayer_circuit_eval +
+  - HANDOFF / verification: (a) py_compile infra/modal_app.py; the 2 new fns exist (multilayer_circuit_eval +
     probe_gemma_scope_multilayer) + the multilayer_circuit_main entrypoint; (b) ruff adds no NEW non-E501
     issue on my lines (>=~2376) vs baseline (114 E501 are pre-existing/not held to the src bar); 170 CPU
     tests still pass (infra not imported by the package); (c) the numbers in EXPERIMENTS/REPORT/README/
     ADR-0008 match circuit_multilayer.json on the volume (`modal volume get microscope-artifacts
-    circuit_multilayer.json <path>` — pull to a FILE, not '-': stdout '-' prepends Modal log lines and
+    circuit_multilayer.json <path>`, pull to a FILE, not '-': stdout '-' prepends Modal log lines and
     corrupts the JSON) AND the FINAL MULTILAYER CIRCUIT RESULT stdout line; (d) the scope label is
     'feature-SET circuit + build-up', NOT a causal edge graph (R4); (e) no fabricated numbers (R5). A
     re-run with seed 0 reproduces modulo minor GPU nondeterminism (E1). NOTE: multilayer_circuit_eval uses

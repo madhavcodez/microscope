@@ -117,5 +117,4 @@ src/microscope/   config, activations, saes/, autointerp/, eval/, circuits/, ste
 infra/modal_app.py  the verified GPU runs (one function per phase)
 docs/             RULES, PROGRESS, EXPERIMENTS, REPORT, adr/
 experiments/      configs/ (one YAML per run), results/
-.claude/agents/   coder, tester, quality-checker
 ```

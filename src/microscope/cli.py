@@ -1,4 +1,4 @@
-"""MicroScope CLI — one command per pipeline stage (Typer).
+"""MicroScope CLI, one command per pipeline stage (Typer).
 
 `microscope info` is fully functional on CPU and exercises the config/determinism/metadata layer.
 The GPU-bound stages (reproduce/train/autointerp/eval/control/circuit) load + hash their config,
@@ -30,7 +30,7 @@ from .config import (
 
 app = typer.Typer(
     add_completion=False,
-    help="MicroScope — reproducible mechanistic-interpretability toolkit.",
+    help="MicroScope, reproducible mechanistic-interpretability toolkit.",
     no_args_is_help=True,
 )
 console = Console()

@@ -3,12 +3,12 @@
 Phase 1, the HARD GATE (RULES.md R1): reproduce a KNOWN property of a pretrained Gemma Scope SAE
 before any custom training. The verified recipe (ADR-0003, proven on the Modal GPU host) loads the
 canonical SAE via ``sae_lens``, harvests TransformerLens ``resid_post`` activations with the BOS
-token excluded, and measures variance-explained + mean L0 — landing at 0.797 / 83 for
+token excluded, and measures variance-explained + mean L0, landing at 0.797 / 83 for
 ``layer_12/width_16k``. The caller logs the returned metrics to docs/EXPERIMENTS.md, labelled
 'reproduced' (R4/R5).
 
 ``sae_lens`` and ``transformer_lens`` are imported lazily (inside functions) so this module still
-imports on the CPU base box where the interp stack is absent — they live only on the Modal ``[gpu]``
+imports on the CPU base box where the interp stack is absent, they live only on the Modal ``[gpu]``
 image (ADR-0003).
 """
 
@@ -26,10 +26,10 @@ def load_pretrained_sae(config: RunConfig) -> Any:
 
     Verified loader (ADR-0003): ``sae_lens.SAE.from_pretrained("gemma-scope-2b-pt-res-canonical",
     "layer_<L>/width_<W>/canonical", device, dtype="bfloat16")``. ``from_pretrained`` may return the
-    SAE object directly or a tuple whose ``[0]`` element is the SAE — both are handled.
+    SAE object directly or a tuple whose ``[0]`` element is the SAE, both are handled.
 
     The layer comes from ``config.layer``; the width from a ``config.width`` field (configs use
-    ``extra='allow'``, so the YAML can carry ``width``), defaulting to ``"16k"`` — the width proven
+    ``extra='allow'``, so the YAML can carry ``width``), defaulting to ``"16k"``, the width proven
     in the reproduction.
 
     Args:
@@ -39,7 +39,7 @@ def load_pretrained_sae(config: RunConfig) -> Any:
         The loaded SAE object (exposes ``.encode`` / ``.decode``), on CUDA if available else CPU.
 
     Raises:
-        RuntimeError: if ``sae_lens`` is not importable — this runs on the Modal ``[gpu]`` image.
+        RuntimeError: if ``sae_lens`` is not importable, this runs on the Modal ``[gpu]`` image.
         ValueError: if ``config.layer`` is ``None``.
     """
     try:
@@ -49,7 +49,7 @@ def load_pretrained_sae(config: RunConfig) -> Any:
 
         raise GpuStackUnavailable(
             "load_pretrained_sae requires 'sae_lens', which is not installed on this machine. This "
-            "stage runs on the Modal [gpu] image (see infra/modal_app.py and docs/adr/0003) — it "
+            "stage runs on the Modal [gpu] image (see infra/modal_app.py and docs/adr/0003), it "
             "cannot run on the CPU base box."
         ) from exc
 
@@ -89,7 +89,7 @@ def reproduce(config: RunConfig) -> dict[str, Any]:
         ``n_tokens``, ``d_sae``.
 
     Raises:
-        RuntimeError: if the interp stack (``sae_lens`` / ``transformer_lens``) is not installed —
+        RuntimeError: if the interp stack (``sae_lens`` / ``transformer_lens``) is not installed -
             this runs on the Modal ``[gpu]`` image (ADR-0003).
     """
     sae = load_pretrained_sae(config)
