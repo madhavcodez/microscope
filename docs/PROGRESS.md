@@ -115,7 +115,7 @@ Phase 1 COMPLETE earlier (R1 gate: repro-001/002 recon, repro-003 SAEBench, repr
 REPORT.md + PHASE1_RETROSPECTIVE.md).
 
 ## Done
-- Repo created at C:\Users\madha\microscope; `git init`; local author `madhavcodez
+- Repo created at the repository root; `git init`; local author `madhavcodez
   <madhavcbusiness@gmail.com>`; gpgsign off. GitHub: https://github.com/madhavcodez/microscope
   (private), `main` pushed.
 - All project docs (docs/RULES.md, PROGRESS.md, EXPERIMENTS.md, REPORT.md, adr/0000),
@@ -134,7 +134,7 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
 ## Blocked / needs human
 - **GATE #1, RESOLVED.** Platform = **Modal** (existing creds + hf-token secret + credits). GPU =
   L4 24GB (~$0.80/hr, per-second billed → no idle burn). HARD cap **$30**; tightened run-gate
-  (~$5/90min). Local scorer. Gemma-2-2B license accepted (account madhavc123). ADR-0003. Spend ≈ $3.
+  (~$5/90min). Local scorer. Gemma-2-2B license accepted. ADR-0003. Spend ≈ $3.
 - (nothing currently blocking)
 
 ## Next (Phase 2, when resuming; NOT started)
