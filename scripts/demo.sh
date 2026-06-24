@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MicroScope demo — walk ONE feature from activation -> label -> validation in <= 3 minutes.
+# MicroScope demo, walk ONE feature from activation -> label -> validation in <= 3 minutes.
 #
 # STATUS: the full feature-walk is GPU-bound and is enabled once Phase 1 lands on the GPU host
 # (docs/PROGRESS.md Gate #1). On a CPU dev box this script verifies the toolkit installs and the
