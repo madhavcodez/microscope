@@ -22,7 +22,7 @@ experiments/results/*
 # Local pull dir for `modal volume get` result JSONs (transient; numbers live in docs/EXPERIMENTS.md)
 artifacts_pull/
 
-# Activation caches can be ~100 GB — never commit (RULES.md C3)
+# Activation caches can be ~100 GB, never commit (RULES.md C3)
 *.activations
 activations_cache/
 *.safetensors
