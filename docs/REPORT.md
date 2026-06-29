@@ -62,9 +62,10 @@ vs 0.796), confirming determinism.
 
 On the bias-in-bios probing task, the SAE probe top-1 accuracy is 0.767 against a residual-stream baseline
 of 0.688. The SAE beats the raw-residual baseline by about 8 points, matching the SAEBench paper's
-qualitative finding (residual baseline around 0.65, SAEs clearly above). This is a single-dataset smoke
-test; the paper's headline is the 8-dataset by k in {1,2,5} mean, and scaling to that is a follow-up rather
-than a different result.
+qualitative finding (residual baseline around 0.65, SAEs clearly above). This was originally a single-dataset
+smoke test; it has since been scaled to the paper headline, eight datasets at k in {1,2,5}
+(`saebench-paper`, 8-dataset mean SAE top-1 0.772 vs 0.679 baseline), detailed in the solidification section
+below.
 
 ### 3. Automated interpretability (delphi, local scorer): METHOD REPRODUCED; scores INCONCLUSIVE for paper comparison  (`repro-004`)
 
@@ -84,16 +85,16 @@ randomized weights), which cancels scorer weakness and isolates whether the inte
 | Claim | Label | Evidence |
 |---|---|---|
 | Gemma Scope SAE reconstruction fidelity (VE/L0) | reproduced | repro-001, repro-002 |
-| SAE sparse-probing beats residual baseline | reproduced | repro-003 |
+| SAE sparse-probing beats residual baseline (single-dataset smoke, then 8-dataset x k{1,2,5} paper headline) | reproduced | repro-003 (single); saebench-paper (8-dataset mean SAE top-1 0.772 vs 0.679, +0.094; SAE wins 7/8, ag_news the exception) |
 | Auto-interp pipeline works on the pretrained SAE (local scorer) | reproduced (method) | repro-004 |
 | Auto-interp absolute detection/fuzz scores are scorer-size dependent (near-chance at 3B, well above at 7B) | reproduced (effect) | repro-004 (3B near-chance) vs ai-g2-*-7b (7B: 0.61-0.69) |
 | Custom SAE + skip-transcoder trained on Gemma-2-2B (artifacts; no interp claim yet) | novel (artifact) | train-g2-sae, train-g2-tc |
 | Custom SAE reconstruction VE (own objective) | novel | recon-g2-sae (0.514) |
 | Custom SAE SAEBench sparse-probing (top-1), below Gemma Scope and below its own residual baseline | novel (honest negative; encode-verified) | saebench-custom-sae-v2 (0.670 vs ref 0.767; baseline 0.688) |
 | SAE-vs-skip-transcoder interpretability head-to-head | scorer-dependent: inconclusive at 3B, transcoder WINS at 7B (novel) | ai-g2-sae/tc (3B, CIs incl 0) then ai-g2-sae-7b/tc-7b (7B: det delta +0.053 CI[+0.016,+0.089], fuzz delta +0.059 CI[+0.019,+0.097]) |
-| Randomized-model control: real SAE has structure beyond token stats | conclusive | ctrl-probe-real/random (paired gap +0.072, CI [+0.033,+0.117]) |
+| Randomized-model control: real SAE has structure beyond token stats | conclusive (n=1); partially replicates across n=5 concepts | ctrl-probe-real/random (n=1 paired gap +0.072, CI [+0.033,+0.117]); ctrl-probe-multi (n=5: mean gap +0.059, 4/5 CIs exclude 0 + survive Holm, all 5 positive, sign-test p=0.0625; 21/19 the lone non-significant one) |
 | Steering control (B): SAE feature vs difference-of-means | inconclusive | ctrl-steer-v2 (both steer well within fluency: SAE +0.312, dom +0.375; delta -0.062, CI [-0.25,+0.125]) |
-| Feature circuit, sparse and faithful (5-10 SAE features) | conclusive (novel) | circuit-g2-sae (top-5 = 94% of ceiling; beats random, CI excl 0) |
+| Feature circuit, sparse and faithful (5-10 SAE features); multi-concept (n=5) + leak-free | conclusive (novel); replicates across n=5 under leak-free attribution + permutation null | circuit-g2-sae (n=1, full-set attribution: top-5 = 94% of ceiling; beats random, CI excl 0); circuit-multi (n=5, train-only attribution: K=10 mean faithfulness 0.927, min 0.873; all 5 beat random + survive Holm; leak fix lowers faithfulness only marginally) |
 | Multi-layer (cross-layer feature-SET) circuit + depth build-up | conclusive (novel) | circuit-multilayer (9 features over L5/12/19 = 97% of ceiling; beats random cross-layer control at every K, CI excl 0; concept accumulates by mid-depth) |
 
 Phase 1 claimed nothing novel (reproduction only, R1). Phase 2 produces novel artifacts but still makes no
@@ -346,6 +347,104 @@ random control uses the same protocol, so the leak is symmetric). The precise cl
 Scope SAE features spanning L5/L12/L19 faithfully mediates the readout of this profession distinction, and
 the signal accumulates by mid-depth.
 
+## Solidification: multi-concept replication + leak-free attribution (ADR-0009)
+
+The conclusive novel results above (the single-layer circuit, the multi-layer circuit, and the
+randomized-model control) all rested on **one** concept: the bias-in-bios professions 21 vs 19. With n=1
+concept, generalization is unproven, and the circuit construction had an asymmetric test-leak (feature
+attribution was computed over the full labeled set, including the test split, before selecting top-K, so
+only the circuit's selection saw test-label-informed attribution while the random control drew blind).
+This follow-up, pre-registered in [ADR-0009](adr/0009-multiconcept-leakfree-and-stats.md), re-runs the
+circuit and the control across **five** deterministic profession contrasts ({21,19} first, for continuity,
+then {21,2}, {19,2}, {2,18}, {21,11}), fixes the leak by computing attribution on the **train split only**
+(held-out), and upgrades the statistics (R=100 random-K permutation null, a genuinely paired bootstrap with
+one shared resample index per iteration over 10,000 iterations, and Holm-Bonferroni across the five
+concepts). All runs are on Modal L4, seed 0, 250 examples per class, using the same custom L12 SAE. The
+original `circuit_eval` / `probing_eval` functions and their logged artifacts are left untouched; this lands
+in new functions (`circuit_multi_eval`, `probing_multi_eval`), so the old-vs-new delta stays checkable.
+
+### Circuit (leak-free, five concepts): REPLICATES (conclusive)
+
+At the pre-registered primary K=10, every concept's sparse SAE-feature circuit beats its random-feature
+control and survives Holm correction:
+
+| Concept (prof ids) | faithfulness (held-out) | faithfulness (full-set) | gap vs random, 95% CI | perm. p | Holm |
+|---|---|---|---|---|---|
+| 21/19 | 0.993 | 1.022 | +0.255 [0.215, 0.293] | 0.0099 | survives |
+| 21/2  | 0.957 | 0.957 | +0.310 [0.263, 0.353] | 0.0099 | survives |
+| 19/2  | 0.889 | 0.896 | +0.201 [0.154, 0.246] | 0.0099 | survives |
+| 2/18  | 0.924 | 0.944 | +0.280 [0.232, 0.323] | 0.0099 | survives |
+| 21/11 | 0.873 | 0.880 | +0.239 [0.180, 0.295] | 0.0099 | survives |
+
+The held-out and full-set faithfulness columns differ only marginally (leak delta at most +0.029; the 21/19
+full-set 1.022 > 1.0 is an over-selection rounding artifact of the leaked attribution, and the held-out
+0.993 is the honest number). So the test-leak fix lowers faithfulness only slightly: the original
+single-concept ~0.97 headline survives the fix rather than collapsing, which is the directly-checkable
+outcome ADR-0009 asked for. Aggregated across all five concepts and circuit sizes:
+
+| K per concept | mean faithfulness (held-out) | min | mean gap vs random | beats random | Holm survivors |
+|---|---|---|---|---|---|
+| 5  | 0.885 | 0.845 | +0.248 | 5 of 5 | 5 of 5 |
+| 10 | 0.927 | 0.873 | +0.257 | 5 of 5 | 5 of 5 |
+| 20 | 0.971 | 0.944 | +0.247 | 5 of 5 | 5 of 5 |
+| 50 | 0.983 | 0.944 | +0.180 | 5 of 5 | 5 of 5 |
+
+**Verdict (R4): the sparse SAE-feature circuit REPLICATES across all five concepts (conclusive)**, under
+leak-free (train-only) attribution and a permutation null. The minimum held-out faithfulness is 0.873 at
+K=10, and every concept at every K beats its random control with a CI excluding zero and survives Holm. This
+is a stronger claim than the original n=1 result, not just a re-run of it.
+
+### Randomized-model control (five concepts): PARTIALLY replicates
+
+The real-model-SAE-vs-randomized-model-SAE probing gap, re-run across the same five concepts with a paired
+bootstrap (real and random share the identical seeded train/test split, so per-example correctness aligns
+index-for-index):
+
+| Concept | real acc | random acc | gap, 95% CI | one-sided p | CI excludes 0 | Holm |
+|---|---|---|---|---|---|---|
+| 21/19 | 0.927 | 0.900 | +0.027 [-0.013, +0.067] | 0.130 | no  | no |
+| 21/2  | 0.940 | 0.887 | +0.053 [+0.007, +0.107] | 0.023 | yes | survives |
+| 19/2  | 0.960 | 0.913 | +0.047 [+0.013, +0.080] | 0.001 | yes | survives |
+| 2/18  | 0.960 | 0.907 | +0.053 [+0.007, +0.100] | 0.016 | yes | survives |
+| 21/11 | 0.947 | 0.833 | +0.113 [+0.060, +0.173] | 0.000 | yes | survives |
+
+Across the five concepts the mean gap is +0.059, all five gaps are positive, four of five CIs exclude zero
+and survive Holm, but the exact two-sided sign test is p = 0.0625 (borderline). **Verdict (R4): the
+real > random control PARTIALLY replicates.** Four of five concepts are individually significant and all
+five point the same way, but the effect is not clean across the board, and, notably, the original 21/19
+contrast is the lone non-significant one at this sample size (gap +0.027, CI includes 0). This is reported
+as a partial result, not a clean win: the real-model SAE does carry structure beyond token statistics, but,
+consistent with the original control's nuance that most of this probing signal is token-level, the
+learned-structure margin is small enough that one concept at 250 examples per class does not separate it
+from zero.
+
+### Paper-grade SAEBench sparse probing (eight datasets x k in {1,2,5}): REPRODUCED
+
+The same ADR-0009 unit also closed the long-standing SAEBench follow-up. `repro-003` ran SAEBench
+`sparse_probing` on a single dataset at k=1 (a smoke test); `saebench_sparse_probing_paper` widens it to the
+paper headline, the canonical Gemma Scope SAE (`gemma-scope-2b-pt-res`, L12 width-16k) across eight datasets
+at k in {1,2,5} (seed 42, Modal L4):
+
+| Dataset | SAE top-1 | residual (LLM) top-1 | SAE top-5 |
+|---|---|---|---|
+| bias_in_bios set1     | 0.767 | 0.688 | 0.918 |
+| bias_in_bios set2     | 0.676 | 0.669 | 0.817 |
+| bias_in_bios set3     | 0.775 | 0.685 | 0.845 |
+| amazon_reviews 1and5  | 0.748 | 0.595 | 0.803 |
+| amazon sentiment      | 0.916 | 0.708 | 0.962 |
+| github-code           | 0.642 | 0.626 | 0.827 |
+| ag_news               | 0.694 | 0.732 | 0.840 |
+| europarl              | 0.961 | 0.726 | 0.998 |
+| **8-dataset mean**    | **0.772** | **0.679** | **0.876** |
+
+On the eight-dataset mean the SAE top-1 probe (0.772) beats the residual-stream baseline (0.679) by +0.094,
+and the full-feature accuracies match (SAE 0.948 / residual 0.954). **Verdict: paper-grade SAEBench
+sparse-probing REPRODUCED at the paper-headline scale**, upgrading `repro-003`'s single-dataset smoke. The
+set1 number reproduces `repro-003` exactly (SAE top-1 0.767, baseline 0.688), confirming determinism. Honest
+nuance (R4): the SAE beats the residual baseline on the mean and on seven of eight datasets; the exception is
+ag_news, where the single best SAE feature (top-1 0.694) trails the baseline (0.732), though it recovers to
+0.840 at top-5. The headline holds; one dataset is a stated exception, not hidden.
+
 ## Status: Phases 1-5 done (Phase 6 = this report); PAUSED for follow-ups
 
 Phases 1-5 are complete, and Phase 6 (this write-up) consolidates them. The Control-B steering sweep was
@@ -356,10 +455,14 @@ sparse_probing eval on the custom SAE (`sae_top_1` 0.670, below Gemma Scope's 0.
 residual baseline 0.688, the expected consequence of the budget training; transcoder N/A per R3). The
 multi-layer circuit follow-up is now also done, as a cross-layer feature-set circuit plus depth build-up
 (`circuit-multilayer`, ADR-0008: 9 Gemma Scope features over L5/12/19 recover 97% of the ceiling and beat a
-random cross-layer control at every size; the profession concept accumulates by mid-depth). Remaining
-possible follow-ups, not done: scaling SAEBench to the full 8-dataset suite, and the heavier
-feature-to-feature causal edge graph (attribution patching, or sparse-feature-circuits). This unit built the
-feature-set plus build-up version, not the causal edge graph. Open questions and risks are in
+random cross-layer control at every size; the profession concept accumulates by mid-depth). The
+solidification follow-up (ADR-0009) is also done: the circuit and the randomized-model control were re-run
+across five profession concepts with leak-free (train-only) attribution, a permutation null, a paired
+bootstrap, and Holm correction (the circuit replicates conclusively; the control partially replicates,
+4/5 concepts significant), and SAEBench was scaled to the full eight-dataset x k{1,2,5} paper headline
+(`saebench-paper`, SAE top-1 0.772 vs 0.679 baseline). The one remaining follow-up, not done, is the heavier
+feature-to-feature causal edge graph (attribution patching, or sparse-feature-circuits); this project built
+the feature-set plus build-up version, not the causal edge graph. Open questions and risks are in
 PHASE1_RETROSPECTIVE.md.
 
 ## Reproducibility and cost

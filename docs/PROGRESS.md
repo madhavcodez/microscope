@@ -2,7 +2,15 @@
 
 ## Current phase
 **PHASES 1-6 COMPLETE (2026-06-22); Control-B steering recalibrated + 7B scorer head-to-head RESOLVED 2026-06-23;
-SAEBench-custom-SAE adapter b_dec bug FIXED + re-run (encode-verified) 2026-06-23; MULTI-LAYER circuit follow-up DONE 2026-06-23.**
+SAEBench-custom-SAE adapter b_dec bug FIXED + re-run (encode-verified) 2026-06-23; MULTI-LAYER circuit follow-up DONE 2026-06-23;
+SOLIDIFICATION (multi-concept n=5 + leak-free attribution + permutation/paired stats + paper-grade 8-dataset SAEBench) DONE 2026-06-28 (ADR-0009).**
+SOLIDIFICATION verdicts (2026-06-28, R4): the sparse SAE-feature circuit REPLICATES across all 5 profession concepts
+under leak-free (train-only) attribution + a permutation null (conclusive; min holdout faithfulness 0.873 at K=10; the
+leak fix lowers but does not erase the effect, so the ~0.97 single-concept headline SURVIVES); the real>random control
+PARTIALLY replicates (4/5 concepts' CIs exclude 0 + survive Holm, all 5 positive, sign-test p=0.0625 borderline, the
+original 21/19 the lone non-significant one); paper-grade SAEBench sparse-probing REPRODUCED at 8-dataset x k{1,2,5}
+(SAE top-1 0.772 vs 0.679 baseline, +0.094 mean, SAE wins 7/8, ag_news the exception). New fns circuit_multi_eval /
+probing_multi_eval / saebench_sparse_probing_paper (originals untouched, D1); CPU analysis scripts/aggregate_controls.py.
 CORE PROJECT DONE: reproduce -> train -> head-to-head -> controls -> circuit -> write-up. Spend ≈ $12.2 of $30
 (7B A100 unit ≈ $0.6; adapter-fix verify+eval ≈ $0.2; multi-layer circuit ≈ $0.35). FOUR conclusive results now: THREE scorer-independent
 (randomized-model control + single-layer sparse feature circuit + multi-layer cross-layer feature-set circuit)
@@ -456,3 +464,68 @@ REPORT.md + PHASE1_RETROSPECTIVE.md).
     'feature-SET circuit + build-up', NOT a causal edge graph (R4); (e) no fabricated numbers (R5). A
     re-run with seed 0 reproduces modulo minor GPU nondeterminism (E1). NOTE: multilayer_circuit_eval uses
     pkg_image (base_image lacks sklearn); probe_gemma_scope_multilayer uses base_image (only needs TL+sae_lens).
+- 2026-06-28: SOLIDIFICATION follow-up, multi-concept replication + leak-free attribution +
+  upgraded statistics (ADR-0008 -> ADR-0009, NEW, pre-registered BEFORE the run, R3). Extends the Phase-5
+  single-layer circuit (circuit-g2-sae, ADR-0006) and the Phase-4 randomized-model control. D1
+  conservative/reversible: ALL changes land in NEW backward-compatible functions, the original
+  circuit_eval / probing_eval and their logged artifacts are UNTOUCHED so the old-vs-new delta stays
+  checkable.
+  - WHY: every conclusive novel claim so far rested on ONE concept (bias_in_bios prof 21 vs 19), so
+    generalization was unproven; AND circuit_eval had an ASYMMETRIC test-leak (attribution
+    |mean_act(c1)-mean_act(c0)| computed over the FULL labeled set incl. the test split before top-K
+    selection => only the circuit's selection saw test-label-informed attribution, the random control drew
+    blind, so the leak could inflate the circuit-vs-random GAP the claim turns on).
+  - CODE (infra/modal_app.py, 3 new fns + 3 entrypoints, backward-compatible): `circuit_multi_eval`
+    (+ `circuit_multi_main`), `probing_multi_eval` (+ `probing_multi_main`), `saebench_sparse_probing_paper`
+    (+ `saebench_paper_main`). Helper `_profession_contrasts` derives a DETERMINISTIC set of distinct binary
+    contrasts from the top-K most-frequent professions; first pair = original {21,19} (continuity), then
+    {21,2},{19,2},{2,18},{21,11}. (a) replicate circuit + control across all 5 (n=1 -> n=5, every contrast
+    reported, none dropped, R3); (b) attribution on the TRAIN split ONLY (held-out), top-K from train-only
+    attribution, probe fit+scored on the held-out test split (full-set attribution computed alongside ONLY
+    to quantify the leak); (c) R=100 random-K permutation null + genuinely paired bootstrap (10000 iters,
+    ONE shared resample index per iter, fixing the prior independent-index "paired" bootstrap) + Holm-
+    Bonferroni across concepts; saebench_sparse_probing_paper widens SAEBench sparse_probing to the
+    8-dataset x k{1,2,5} paper headline. CPU analysis: scripts/aggregate_controls.py (numpy-only; computes,
+    does not fabricate; writes solidification_summary.json). Seeds set+logged (E1, seed 0; rng(0),
+    sklearn random_state=0; one fixed split per concept reused across arms = paired). py_compile OK.
+  - RAN (Modal L4, seed 0, n_per_class 250, 2026-06-28; custom L12 SAE already on the artifacts volume):
+    circuit_multi_eval + probing_multi_eval (real + randomize) + saebench_sparse_probing_paper. Pulled
+    circuit_multi.json / probing_multi_real.json / probing_multi_random.json / saebench_paper.json; ran
+    scripts/aggregate_controls.py -> solidification_summary.json. ~$0.3 (circuit) + ~$0.5 (control,
+    real+random) + ~$0.7 (saebench-8) est GPU, under cap.
+  - RESULT (real, R5, no fabrication):
+    * CIRCUIT (leak-free, 5 concepts). Primary K=10 holdout/fullset/gap CI95/perm-p/Holm: 21/19
+      0.993/1.022 +0.2553[0.2145,0.2927] 0.0099 survive; 21/2 0.957/0.957 +0.3100[0.2633,0.3528] survive;
+      19/2 0.889/0.896 +0.2013[0.1539,0.2458] survive; 2/18 0.924/0.944 +0.2799[0.2321,0.3230] survive;
+      21/11 0.873/0.880 +0.2389[0.1803,0.2945] survive. Cross-K aggregate mean faithfulness K=5/10/20/50 =
+      0.885/0.927/0.971/0.983 (min 0.845/0.873/0.944/0.944); ALL 5 of 5 beat random + survive Holm at every
+      K. leak_delta=fullset-holdout <=+0.029 (21/19 fullset 1.022>1.0 = over-selection rounding artifact of
+      leaked attribution; holdout 0.993 honest) => the leak fix lowers faithfulness only marginally.
+    * CONTROL real vs random SAE (paired bootstrap, 5 concepts). real/random/gap CI95/p/Holm: 21/19
+      0.9267/0.9000 +0.0267[-0.0133,+0.0667] 0.1302 NO; 21/2 0.9400/0.8867 +0.0533[+0.0067,+0.1067] survive;
+      19/2 0.9600/0.9133 +0.0467[+0.0133,+0.0800] survive; 2/18 0.9600/0.9067 +0.0533[+0.0067,+0.1000]
+      survive; 21/11 0.9467/0.8333 +0.1134[+0.0600,+0.1733] survive. mean gap +0.0587; 4/5 CIs exclude 0;
+      5/5 positive; sign-test p=0.0625; 4/5 survive Holm.
+    * SAEBENCH-8 (paper headline). 8-dataset mean SAE top-1=0.772, top-2=0.809, top-5=0.876 vs residual(LLM)
+      baseline top-1=0.679; SAE beats baseline top-1 by +0.094 on the mean and on 7/8 datasets; set1
+      reproduces repro-003 (0.767/0.688, deterministic); exception ag_news (top-1 0.694<0.732, rises to
+      0.84 at top-5).
+  - VERDICTS (R4): (1) sparse SAE-feature circuit REPLICATES across all 5 concepts (conclusive) under
+    leak-free attribution + permutation null; min holdout faithfulness 0.873 at K=10; the test-leak fix
+    lowers but does not erase the effect => STRONGER than the original n=1 claim. (2) real>random control
+    PARTIALLY replicates (4/5 CIs exclude 0 + survive Holm, all 5 positive, sign-test p=0.0625 borderline;
+    the original 21/19 is the lone non-significant one at n_per_class=250); reported honestly, NOT a clean
+    win. (3) paper-grade SAEBench sparse-probing REPRODUCED at the 8-dataset x k{1,2,5} scale, upgrading
+    repro-003's single-dataset smoke.
+  - DOCS: ADR-0009 (new, pre-registered), EXPERIMENTS.md (circuit-multi + ctrl-probe-multi + saebench-paper
+    rows), REPORT.md (Solidification section: per-concept circuit table + control table + SAEBench-8 table +
+    3 verdicts; honest-scope rows updated to n=5 + leak-free; status updated), README (results rows +
+    reproduce commands), PROGRESS (this), portfolio microscope.mdx (current status). On branch
+    solidify/multiconcept-leakfree (NOT main).
+  - HANDOFF / verification: (a) py_compile infra/modal_app.py + scripts/aggregate_controls.py; the 3 new fns
+    + 3 entrypoints exist; (b) 170 CPU tests still pass (infra not imported by the package); (c) the numbers
+    in EXPERIMENTS/REPORT/README/portfolio match circuit_multi.json / probing_multi_real.json /
+    probing_multi_random.json / saebench_paper.json + solidification_summary.json (R5, no fabrication);
+    (d) attribution is TRAIN-only in circuit_multi_eval (leak fix), bootstrap uses ONE shared index per iter
+    (genuinely paired); (e) original circuit_eval/probing_eval + their artifacts untouched (D1). Re-run with
+    seed 0 reproduces modulo minor GPU nondeterminism (E1).

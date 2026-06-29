@@ -2654,3 +2654,413 @@ def multilayer_circuit_main(
     )
     print("FINAL MULTILAYER CIRCUIT RESULT:",
           {k: v for k, v in result.items() if k not in ("circuit_feature_ids",)})
+
+
+# ---------------------------------------------------------------------------
+# Solidification follow-ups (ADR-0009): multi-concept replication + held-out
+# attribution for the circuit and the randomized-model control, and a
+# paper-grade multi-dataset SAEBench reproduction. These REUSE the proven
+# Phase-1/4/5 recipes (same image, GPU, model/SAE load) and only (a) loop over
+# several profession contrasts in ONE container (amortized load) and (b) fix
+# the self-admitted attribution test-leak by selecting features on the TRAIN
+# split only. New functions; nothing above is changed (no regression / no
+# artifact clobber).
+# ---------------------------------------------------------------------------
+
+
+def _profession_contrasts(top_ids: list[int]) -> list[tuple[int, int]]:
+    """Deterministic, curated set of distinct binary profession contrasts from the most populous
+    professions (so each contrast has enough examples). (top_ids[0], top_ids[1]) reproduces the
+    original Phase-5 contrast; the rest add diversity for the multi-concept aggregate (ADR-0009)."""
+    ids = [int(x) for x in top_ids]
+    if len(ids) < 2:
+        return []
+    while len(ids) < 5:
+        ids.append(ids[-1])
+    a, b, c, d, e = ids[:5]
+    cand = [(a, b), (a, c), (b, c), (c, d), (a, e)]
+    seen: set = set()
+    out: list[tuple[int, int]] = []
+    for x, y in cand:
+        if x == y:
+            continue
+        key = (min(x, y), max(x, y))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((x, y))
+    return out
+
+
+def _bias_in_bios_cols(ds) -> tuple[str, str]:
+    cols = ds.column_names
+    text_col = "hard_text" if "hard_text" in cols else ("text" if "text" in cols else cols[0])
+    label_col = "profession" if "profession" in cols else ("label" if "label" in cols else cols[-1])
+    return text_col, label_col
+
+
+@app.function(
+    image=pkg_image, gpu="L4", secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=3600, retries=0,
+)
+def circuit_multi_eval(run_name: str = "train_gemma2_2b_l12-sae", layer: int = 12,
+                       n_per_class: int = 250, seq_len: int = 64, top_k: int = 5,
+                       ks: str = "5,10,20,50", seed: int = 0) -> dict:
+    """Multi-concept circuit replication + held-out attribution (ADR-0009).
+
+    Extends circuit_eval from the single bias_in_bios professions{21,19} contrast to several distinct
+    profession contrasts (the most populous professions), turning the n=1 circuit result into an
+    aggregate over n>=3 concepts. ALSO fixes the attribution test-leak: feature attribution (class-mean
+    activation diff) is computed on the TRAIN split ONLY (held-out), so absolute faithfulness no longer
+    sees the test rows. Reports BOTH held-out and the original full-set attribution per concept, so the
+    leak-fix's effect is visible and the original result's survival is checked. Same metric/recipe as
+    ADR-0006 otherwise (R3/R4). Activations are harvested ONCE per profession and reused across
+    contrasts (amortized) so the whole sweep runs in one L4 container."""
+    import json as _json
+    import os
+    from collections import Counter
+
+    import numpy as np
+    import sparsify
+    import torch
+    from datasets import load_dataset
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import train_test_split
+    from transformers import AutoModel, AutoTokenizer
+
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    K_list = [int(x) for x in ks.split(",") if x.strip()]
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    dev = "cuda"
+    sae = sparsify.SparseCoder.load_from_disk(
+        f"/root/outputs/coders/{run_name}/layers.{layer}", device=dev
+    ).to(dev, torch.bfloat16)
+    d_sae = int(sae.cfg.num_latents)
+    model = AutoModel.from_pretrained(
+        "google/gemma-2-2b", torch_dtype=torch.bfloat16, token=token
+    ).to(dev).eval()
+    tok = AutoTokenizer.from_pretrained("google/gemma-2-2b", token=token)
+    lm = model.layers[layer]
+
+    ds = load_dataset("LabHC/bias_in_bios", split="train")
+    text_col, label_col = _bias_in_bios_cols(ds)
+    top_ids = [int(c) for c, _ in Counter(ds[label_col]).most_common(top_k)]
+    contrasts = _profession_contrasts(top_ids)
+    profs_needed = sorted({p for pair in contrasts for p in pair})
+
+    cap: dict = {}
+
+    def dense(x):
+        enc = sae.encode(x.to(torch.bfloat16))
+        if torch.is_tensor(enc) and enc.shape[-1] == d_sae:
+            return enc.float()
+        ta, ti = getattr(enc, "top_acts", enc[0]), getattr(enc, "top_indices", enc[1])
+        out = torch.zeros(x.shape[0], d_sae, device=x.device)
+        out.scatter_(1, ti.long(), ta.float())
+        return out
+
+    feats: dict[int, list] = {p: [] for p in profs_needed}
+    need = {p: n_per_class for p in profs_needed}
+    with torch.no_grad():
+        for tx, lb in zip(ds[text_col], ds[label_col]):
+            lb = int(lb)
+            if lb in need and need[lb] > 0 and tx and tx.strip():
+                ids = tok(tx, return_tensors="pt", truncation=True,
+                          max_length=seq_len).input_ids.to(dev)
+                h = lm.register_forward_hook(
+                    lambda m, i, o: cap.__setitem__("y", o[0] if isinstance(o, tuple) else o))
+                model(ids)
+                h.remove()
+                feats[lb].append(dense(cap["y"][0, 1:].to(torch.bfloat16)).mean(0).cpu().numpy())
+                need[lb] -= 1
+            if all(v <= 0 for v in need.values()):
+                break
+    feats = {p: np.array(v) for p, v in feats.items()}
+    rng = np.random.default_rng(seed)
+
+    def eval_contrast(a: int, b: int) -> dict:
+        X = np.concatenate([feats[a], feats[b]], 0)
+        y = np.array([0] * len(feats[a]) + [1] * len(feats[b]))
+        Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.3, random_state=seed, stratify=y)
+        attr_ho = np.abs(Xtr[ytr == 1].mean(0) - Xtr[ytr == 0].mean(0))  # leak-free (train only)
+        order_ho = np.argsort(-attr_ho)
+        attr_fs = np.abs(X[y == 1].mean(0) - X[y == 0].mean(0))  # original full-set (sees test)
+        order_fs = np.argsort(-attr_fs)
+
+        def probe_correct(cols):
+            clf = LogisticRegression(max_iter=2000, C=0.5).fit(Xtr[:, cols], ytr)
+            return (clf.predict(Xte[:, cols]) == yte).astype(float)
+
+        ceiling = float(probe_correct(np.arange(d_sae)).mean())
+        n = len(yte)
+        R = 100  # random-K subsets => a real null distribution, not a single noisy draw
+        rows = []
+        for K in K_list:
+            cho = probe_correct(order_ho[:K])
+            cfs = probe_correct(order_fs[:K])
+            rand_corr = np.array([probe_correct(rng.choice(d_sae, K, replace=False))
+                                  for _ in range(R)])  # (R, n)
+            rand_accs = rand_corr.mean(1)
+            cr_mean = rand_corr.mean(0)  # per-example mean correctness of the random-K null
+            circuit_acc = float(cho.mean())
+            perm_p = float((int(np.sum(rand_accs >= circuit_acc)) + 1) / (R + 1))
+            # PAIRED bootstrap: ONE shared resample index applied to both arms (the prior code used
+            # two independent indices, which inflates the variance and is not actually paired).
+            boot = np.array([(cho[idx] - cr_mean[idx]).mean()
+                             for idx in (rng.integers(0, n, n) for _ in range(10000))])
+            lo, hi = np.percentile(boot, [2.5, 97.5])
+            rlo, rhi = np.percentile(rand_accs, [2.5, 97.5])
+            rows.append({
+                "K": K,
+                "acc_topK_holdout": round(circuit_acc, 4),
+                "acc_topK_fullset": round(float(cfs.mean()), 4),
+                "acc_randomK_mean": round(float(rand_accs.mean()), 4),
+                "acc_randomK_band95": [round(float(rlo), 4), round(float(rhi), 4)],
+                "faithfulness_holdout": round(circuit_acc / ceiling, 3),
+                "faithfulness_fullset": round(float(cfs.mean()) / ceiling, 3),
+                "gap_holdout_minus_random": round(circuit_acc - float(rand_accs.mean()), 4),
+                "gap_ci95_paired": [round(float(lo), 4), round(float(hi), 4)],
+                "permutation_p": perm_p,
+                "circuit_beats_random": bool(lo > 0 and perm_p < 0.05),
+            })
+        return {
+            "classes": [int(a), int(b)], "n_examples": int(len(y)),
+            "ceiling_acc_full": round(ceiling, 4),
+            "top10_feature_ids_holdout": [int(i) for i in order_ho[:10]],
+            "by_K": rows,
+        }
+
+    per_concept = [eval_contrast(a, b) for (a, b) in contrasts]
+    agg = []
+    for K in K_list:
+        idx = K_list.index(K)
+        faiths = [c["by_K"][idx]["faithfulness_holdout"] for c in per_concept]
+        gaps = [c["by_K"][idx]["gap_holdout_minus_random"] for c in per_concept]
+        beats = [c["by_K"][idx]["circuit_beats_random"] for c in per_concept]
+        agg.append({
+            "K": K, "n_concepts": len(per_concept),
+            "mean_faithfulness_holdout": round(float(np.mean(faiths)), 3),
+            "min_faithfulness_holdout": round(float(np.min(faiths)), 3),
+            "mean_gap": round(float(np.mean(gaps)), 4),
+            "n_concepts_beating_random": int(sum(beats)),
+        })
+    out = {
+        "run_name": run_name, "layer": layer, "attr_modes": ["holdout", "fullset"],
+        "contrasts": [[int(a), int(b)] for a, b in contrasts],
+        "top_professions": top_ids, "d_sae": d_sae, "seed": seed,
+        "n_per_class": n_per_class, "per_concept": per_concept, "aggregate": agg,
+    }
+    with open("/root/outputs/circuit_multi.json", "w") as fh:
+        _json.dump(out, fh)
+    artifacts_vol.commit()
+    print("CIRCUIT MULTI AGG:", agg)
+    print("CONTRASTS:", out["contrasts"])
+    return out
+
+
+@app.local_entrypoint()
+def circuit_multi_main(run_name: str = "train_gemma2_2b_l12-sae", layer: int = 12,
+                       n_per_class: int = 250, top_k: int = 5, ks: str = "5,10,20,50",
+                       seed: int = 0) -> None:
+    """modal run infra/modal_app.py::circuit_multi_main"""
+    r = circuit_multi_eval.remote(run_name=run_name, layer=layer, n_per_class=n_per_class,
+                                  top_k=top_k, ks=ks, seed=seed)
+    print("FINAL CIRCUIT MULTI:", {"contrasts": r["contrasts"], "aggregate": r["aggregate"]})
+
+
+@app.function(
+    image=pkg_image, gpu="L4", secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=3600, retries=0,
+)
+def probing_multi_eval(run_name: str, randomize: bool = False, layer: int = 12,
+                       top_k: int = 5, n_per_class: int = 250, seq_len: int = 64,
+                       seed: int = 0) -> dict:
+    """Multi-concept randomized-model control (ADR-0009): the Control-A probing accuracy (an SAE's
+    features linearly separating two professions) replicated across several profession contrasts, so
+    the n=1 control becomes an aggregate. One model per call (real OR randomized, same rebuild as
+    probing_eval). Pair real vs random per concept afterwards (scripts/aggregate_controls.py).
+    Activations harvested once per profession and reused across contrasts."""
+    import json as _json
+    import os
+    from collections import Counter
+
+    import numpy as np
+    import sparsify
+    import torch
+    from datasets import load_dataset
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import train_test_split
+    from transformers import AutoConfig, AutoModel, AutoTokenizer
+
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    dev = "cuda"
+    coder = sparsify.SparseCoder.load_from_disk(
+        f"/root/outputs/coders/{run_name}/layers.{layer}", device=dev
+    ).to(dev, torch.bfloat16)
+    d_sae = int(coder.cfg.num_latents)
+    model = AutoModel.from_pretrained(
+        "google/gemma-2-2b", torch_dtype=torch.bfloat16, token=token
+    ).to(dev)
+    if randomize:  # rebuild the SAME seeded randomized model the random SAE was trained on (ADR-0005)
+        torch.manual_seed(0)
+        emb = model.get_input_embeddings().weight.data.clone()
+        model = AutoModel.from_config(
+            AutoConfig.from_pretrained("google/gemma-2-2b", token=token)
+        ).to(dev, torch.bfloat16)
+        model.get_input_embeddings().weight.data.copy_(emb)
+    model.eval()
+    tok = AutoTokenizer.from_pretrained("google/gemma-2-2b", token=token)
+    lm = model.layers[layer]
+
+    ds = load_dataset("LabHC/bias_in_bios", split="train")
+    text_col, label_col = _bias_in_bios_cols(ds)
+    top_ids = [int(c) for c, _ in Counter(ds[label_col]).most_common(top_k)]
+    contrasts = _profession_contrasts(top_ids)
+    profs_needed = sorted({p for pair in contrasts for p in pair})
+
+    cap: dict = {}
+
+    def dense_feats(x):
+        enc = coder.encode(x)
+        if torch.is_tensor(enc) and enc.shape[-1] == d_sae:
+            return enc.float()
+        ta = getattr(enc, "top_acts", None)
+        ti = getattr(enc, "top_indices", None)
+        if ta is None and isinstance(enc, (tuple, list)):
+            ta, ti = enc[0], enc[1]
+        out = torch.zeros(x.shape[0], d_sae, device=x.device, dtype=torch.float32)
+        out.scatter_(1, ti.long(), ta.float())
+        return out
+
+    feats: dict[int, list] = {p: [] for p in profs_needed}
+    need = {p: n_per_class for p in profs_needed}
+    with torch.no_grad():
+        for tx, lb in zip(ds[text_col], ds[label_col]):
+            lb = int(lb)
+            if lb in need and need[lb] > 0 and tx and tx.strip():
+                ids = tok(tx, return_tensors="pt", truncation=True,
+                          max_length=seq_len).input_ids.to(dev)
+                h = lm.register_forward_hook(
+                    lambda m, i, o: cap.__setitem__("y", o[0] if isinstance(o, tuple) else o))
+                model(ids)
+                h.remove()
+                xx = cap["y"][0, 1:].to(torch.bfloat16)
+                feats[lb].append(dense_feats(xx).mean(0).cpu().numpy())
+                need[lb] -= 1
+            if all(v <= 0 for v in need.values()):
+                break
+    feats = {p: np.array(v) for p, v in feats.items()}
+
+    per_concept = []
+    for a, b in contrasts:
+        X = np.concatenate([feats[a], feats[b]], 0)
+        y = np.array([0] * len(feats[a]) + [1] * len(feats[b]))
+        Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.3, random_state=seed, stratify=y)
+        clf = LogisticRegression(max_iter=2000, C=0.5).fit(Xtr, ytr)
+        pred = clf.predict(Xte)
+        acc = float((pred == yte).mean())
+        rng = np.random.default_rng(seed)
+        boot = [float((pred[i] == yte[i]).mean())
+                for i in (rng.integers(0, len(yte), len(yte)) for _ in range(2000))]
+        lo, hi = np.percentile(boot, [2.5, 97.5])
+        per_concept.append({
+            "classes": [int(a), int(b)], "n_examples": int(len(y)),
+            "sae_probe_acc": round(acc, 4), "acc_ci95": [round(float(lo), 4), round(float(hi), 4)],
+            "yte": [int(v) for v in yte], "pred": [int(v) for v in pred],
+        })
+
+    out = {
+        "run_name": run_name, "randomize": randomize, "layer": layer, "d_sae": d_sae,
+        "seed": seed, "n_per_class": n_per_class,
+        "contrasts": [[int(a), int(b)] for a, b in contrasts],
+        "top_professions": top_ids, "per_concept": per_concept,
+    }
+    fname = f"probing_multi_{'random' if randomize else 'real'}.json"
+    with open(f"/root/outputs/{fname}", "w") as fh:
+        _json.dump(out, fh)
+    artifacts_vol.commit()
+    print(f"PROBING MULTI ({'random' if randomize else 'real'}):",
+          [(c["classes"], c["sae_probe_acc"]) for c in per_concept])
+    return out
+
+
+@app.local_entrypoint()
+def probing_multi_main(real_run: str = "train_gemma2_2b_l12-sae",
+                       random_run: str = "train_gemma2_2b_l12-sae-random",
+                       layer: int = 12, top_k: int = 5, n_per_class: int = 250,
+                       seed: int = 0) -> None:
+    """Run BOTH the real and randomized-model probing controls across concepts:
+    modal run infra/modal_app.py::probing_multi_main"""
+    r = probing_multi_eval.remote(run_name=real_run, randomize=False, layer=layer,
+                                  top_k=top_k, n_per_class=n_per_class, seed=seed)
+    rnd = probing_multi_eval.remote(run_name=random_run, randomize=True, layer=layer,
+                                    top_k=top_k, n_per_class=n_per_class, seed=seed)
+    print("REAL:", [(c["classes"], c["sae_probe_acc"]) for c in r["per_concept"]])
+    print("RANDOM:", [(c["classes"], c["sae_probe_acc"]) for c in rnd["per_concept"]])
+
+
+@app.function(
+    image=full_image, gpu="L4", secrets=[HF_SECRET],
+    volumes={**CACHE, "/root/outputs": artifacts_vol}, timeout=7200, retries=0,
+)
+def saebench_sparse_probing_paper(layer: int = 12, width: str = "16k", datasets_csv: str = "",
+                                  ks: str = "1,2,5", train_size: int = 1500,
+                                  test_size: int = 500) -> dict:
+    """Paper-grade SAEBench sparse_probing (ADR-0009): the canonical Gemma Scope SAE across MULTIPLE
+    datasets and k in {1,2,5} (the paper headline), vs repro-003's single-dataset / k=1 smoke. Same
+    verified recipe (sae_bench.evals.sparse_probing) as saebench_sparse_probing; only dataset_names +
+    k_values are widened. Pass datasets_csv from probe_saebench_datasets' recognized keys (E4)."""
+    import glob
+    import json
+    import os
+
+    from sae_bench.evals.sparse_probing import main as sp
+
+    k_values = [int(x) for x in ks.split(",") if x.strip()]
+    dataset_names = [d.strip() for d in datasets_csv.split(",") if d.strip()]
+    if not dataset_names:
+        dataset_names = list(sp.SparseProbingEvalConfig().dataset_names)
+    sae_id = f"layer_{layer}/width_{width}/canonical"
+    selected_saes = [("gemma-scope-2b-pt-res-canonical", sae_id)]
+    config = sp.SparseProbingEvalConfig(
+        model_name="gemma-2-2b", random_seed=42, llm_batch_size=32, llm_dtype="bfloat16",
+        dataset_names=dataset_names, probe_train_set_size=train_size,
+        probe_test_set_size=test_size, context_length=128, k_values=k_values,
+    )
+    out_path = "eval_results/sparse_probing_paper"
+    sp.run_eval(config, selected_saes, "cuda", out_path,
+                force_rerun=True, clean_up_activations=True, save_activations=False)
+    files = glob.glob(os.path.join(out_path, "*_eval_results.json"))
+    if not files:
+        raise RuntimeError(f"no SAEBench result json written to {out_path}")
+    res = json.load(open(files[0]))
+    metrics = res.get("eval_result_metrics", {})
+    details = res.get("eval_result_details", [])
+    out = {
+        "sae_id": sae_id, "datasets": dataset_names, "k_values": k_values,
+        "sae_metrics": metrics.get("sae", {}), "llm_metrics": metrics.get("llm", {}),
+        "per_dataset": [
+            {"dataset": d.get("dataset_name"),
+             "sae_top_1": d.get("sae_top_1_test_accuracy"),
+             "sae_top_2": d.get("sae_top_2_test_accuracy"),
+             "sae_top_5": d.get("sae_top_5_test_accuracy"),
+             "llm_top_1": d.get("llm_top_1_test_accuracy")}
+            for d in details
+        ],
+    }
+    with open("/root/outputs/saebench_paper.json", "w") as fh:
+        json.dump({"summary": out, "raw_metrics": metrics, "raw_details": details}, fh)
+    artifacts_vol.commit()
+    print("SAEBENCH PAPER RESULT:", out)
+    return out
+
+
+@app.local_entrypoint()
+def saebench_paper_main(datasets_csv: str = "", ks: str = "1,2,5", layer: int = 12,
+                        width: str = "16k") -> None:
+    """modal run infra/modal_app.py::saebench_paper_main --datasets-csv "k1,k2,..." """
+    r = saebench_sparse_probing_paper.remote(layer=layer, width=width, datasets_csv=datasets_csv, ks=ks)
+    print("FINAL SAEBENCH PAPER:", r)

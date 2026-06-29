@@ -14,22 +14,24 @@ The deliverable is a clean, installable repo plus a written report framed as a f
 what was reproduced, what is novel, and what is inconclusive. The defining property of this project is
 honest evaluation; see [`docs/RULES.md`](docs/RULES.md).
 
-> Status: Phases 1-5 complete (reproduction, custom coders, head-to-head, controls, circuit), run on Modal
-> under a $30 GPU cap (about $11 spent). The finding is in [`docs/REPORT.md`](docs/REPORT.md), and every
-> number traces to [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md). Phase 6 = this write-up.
+> Status: Phases 1-5 complete (reproduction, custom coders, head-to-head, controls, circuit), plus a
+> solidification follow-up (ADR-0009) that replicates the circuit and the randomized-model control across
+> five concepts with leak-free attribution and permutation/paired statistics, and scales SAEBench to the
+> 8-dataset paper headline. Run on Modal under a $30 GPU cap (about $14 spent). The finding is in
+> [`docs/REPORT.md`](docs/REPORT.md), and every number traces to [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md).
 
 ## Results (the finding)
 
 | Result | Verdict | Evidence |
 |---|---|---|
 | Reproduce Gemma Scope: reconstruction VE 0.80 / L0 83 | reproduced | `repro-001/002` |
-| Reproduce SAEBench sparse probing (0.767 vs 0.688 baseline) | reproduced | `repro-003` |
+| Reproduce SAEBench sparse probing (single-dataset, then 8-dataset x k{1,2,5} paper headline) | reproduced | `repro-003` (single); `saebench-paper` (8-dataset mean SAE top-1 0.772 vs 0.679, +0.094; SAE wins 7/8) |
 | Auto-interp pipeline (local scorer) | method reproduced; 3B near-chance, 7B well above chance | `repro-004`, `ai-g2-*-7b` |
 | Custom SAE vs skip-transcoder interpretability head-to-head | scorer-dependent: inconclusive at 3B, transcoder WINS at 7B (novel) | `ai-g2-sae/tc` (3B) then `ai-g2-sae-7b/tc-7b` |
 | Custom SAE SAEBench sparse probing (sparsify to sae_lens adapter, encode-verified) | novel (honest negative): 0.670 < Gemma Scope 0.767 and < its own residual baseline 0.688 (budget training) | `saebench-custom-sae-v2` |
-| Randomized-model control: real-model SAE > randomized-model SAE | conclusive (+0.072, CI [0.033, 0.117]) | `ctrl-probe-*` |
+| Randomized-model control: real-model SAE > randomized-model SAE | conclusive (n=1, +0.072, CI [0.033, 0.117]); partially replicates across n=5 (4/5 concepts significant) | `ctrl-probe-*`, `ctrl-probe-multi` |
 | Steering: SAE feature vs difference-of-means | inconclusive (both steer; dom matches SAE, CI incl 0) | `ctrl-steer-v2` |
-| Feature circuit: 5-10 SAE features = 94-97% of full accuracy | conclusive (novel) | `circuit-g2-sae` |
+| Feature circuit: 5-10 SAE features = 94-97% of full accuracy; replicates across n=5 concepts, leak-free + permutation-controlled | conclusive (novel) | `circuit-g2-sae` (n=1), `circuit-multi` (n=5, train-only attribution: K=10 mean faithfulness 0.927, min 0.873, all 5 beat random + survive Holm) |
 | Multi-layer (cross-layer) circuit: about 9 features over L5/12/19 = 97% of full accuracy; concept accumulates by mid-depth | conclusive (novel) | `circuit-multilayer` |
 
 In short: the novel transcoder-vs-SAE comparison was inconclusive under the weak 3B scorer, but a stronger
@@ -89,6 +91,12 @@ modal run infra/modal_app.py::steer_eval                      # control B (steer
 modal run infra/modal_app.py::circuit_eval
 # Phase 5: multi-layer (cross-layer) circuit: pretrained Gemma Scope SAEs at L5/12/19 (ADR-0008)
 modal run infra/modal_app.py::multilayer_circuit_main
+
+# Solidification (ADR-0009): multi-concept (n=5) + leak-free (train-only) attribution + permutation/paired stats
+modal run infra/modal_app.py::circuit_multi_main               # circuit across 5 profession concepts, held-out attribution
+modal run infra/modal_app.py::probing_multi_main               # real vs randomized-model control across 5 concepts (paired)
+modal run infra/modal_app.py::saebench_paper_main              # SAEBench sparse probing, 8 datasets x k{1,2,5} (paper headline)
+python scripts/aggregate_controls.py --dir artifacts_pull      # cross-concept aggregate: permutation null + paired bootstrap + Holm
 ```
 
 Run `PYTHONUTF8=1` on Windows. Each run logs a row to [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) with
