@@ -346,21 +346,6 @@ random control uses the same protocol, so the leak is symmetric). The precise cl
 Scope SAE features spanning L5/L12/L19 faithfully mediates the readout of this profession distinction, and
 the signal accumulates by mid-depth.
 
-## Status: Phases 1-5 done (Phase 6 = this report); PAUSED for follow-ups
-
-Phases 1-5 are complete, and Phase 6 (this write-up) consolidates them. The Control-B steering sweep was
-recalibrated (`ctrl-steer-v2`) into a discriminating, honestly-inconclusive result, and the deferred Phase-3
-SAEBench-on-custom-SAE item is now closed: a `sparsify` to `sae_lens.TopKSAE` adapter (ADR-0007), with an
-encode-fidelity check that proves it reproduces sparsify's `coder.encode` exactly, ran the full
-sparse_probing eval on the custom SAE (`sae_top_1` 0.670, below Gemma Scope's 0.767 and below its own
-residual baseline 0.688, the expected consequence of the budget training; transcoder N/A per R3). The
-multi-layer circuit follow-up is now also done, as a cross-layer feature-set circuit plus depth build-up
-(`circuit-multilayer`, ADR-0008: 9 Gemma Scope features over L5/12/19 recover 97% of the ceiling and beat a
-random cross-layer control at every size; the profession concept accumulates by mid-depth). Remaining
-possible follow-ups, not done: scaling SAEBench to the full 8-dataset suite, and the heavier
-feature-to-feature causal edge graph (attribution patching, or sparse-feature-circuits). This unit built the
-feature-set plus build-up version, not the causal edge graph. Open questions and risks are in
-PHASE1_RETROSPECTIVE.md.
 
 ## Reproducibility and cost
 
